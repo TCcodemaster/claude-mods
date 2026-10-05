@@ -92,6 +92,20 @@ async function showInVSCode($: EngineInterface, source: string): Promise<boolean
   }
 }
 
+// 裝了 vscode-viewer 擴充套件時，寫出網頁讓它在旁邊一欄顯示，不需要 Chrome。
+async function showInViewer($: EngineInterface, html: string): Promise<boolean> {
+  const home = await $.env.get('HOME')
+  if (!home) return false
+  const installed = await $.fs
+    .list(`${home}/.vscode/extensions`)
+    .then(entries => entries.some(entry => entry.name.startsWith('tccodemaster.flowmap-viewer-')))
+    .catch(() => false)
+  if (!installed) return false
+  const pid = (await $.env.get('VSCODE_PID')) ?? 'default'
+  await $.fs.write(`${home}/.claude/flowmap/vscode-${pid}.html`, html)
+  return true
+}
+
 async function isVSCode($: EngineInterface): Promise<boolean> {
   return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-vscode' || (await $.env.get('TERM_PROGRAM')) === 'vscode'
 }
@@ -134,11 +148,13 @@ async function generate($: EngineInterface, answer: string): Promise<void> {
   await update($, map, () => next)
   if (await read($, isWeb)) {
     const inCmux = Boolean(await $.env.get('CMUX_WORKSPACE_ID'))
+    const stamp = new Date(at).toLocaleString('zh-TW', { hour12: false })
+    const html = buildHtml(parsed.summary, parsed.mermaid, stamp)
     if (!inCmux && (await isVSCode($))) {
+      if (await showInViewer($, html)) return
       if (await showInVSCode($, mermaidForImage(parsed.summary, parsed.mermaid, parsed.diagram))) return
     }
-    const stamp = new Date(at).toLocaleString('zh-TW', { hour12: false })
-    await showInCmux($, buildHtml(parsed.summary, parsed.mermaid, stamp))
+    await showInCmux($, html)
   }
 }
 
