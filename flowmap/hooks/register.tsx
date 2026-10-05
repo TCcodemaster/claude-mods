@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { FlowMap } from '../types'
-import { buildHtml, JUDGE, parseReply, SYSTEM, TERMINAL_COLORS } from './flow'
+import { buildHtml, JUDGE, parseReply, parseSurface, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 
 const PANE = 'flowmap'
 const TITLE = '圖解'
@@ -41,27 +41,22 @@ async function isWorthDrawing($: EngineInterface, answer: string): Promise<boole
 }
 
 // 把頁面送進 cmux 的瀏覽器窗格；窗格被關掉就重開一個。
+// 頁面直接編進 data URL，不寫檔：SSH 到遠端時，本機的 cmux 瀏覽器讀不到伺服器上的檔案。
+// 只用本機版與遠端版 cmux 都認得的參數，輸出則兩種格式都接受。
 async function showInCmux($: EngineInterface, html: string): Promise<void> {
-  const workspace = await $.env.get('CMUX_WORKSPACE_ID')
-  const home = await $.env.get('HOME')
-  if (!workspace || !home) return
+  if (!(await $.env.get('CMUX_WORKSPACE_ID'))) return
   const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
-  const key = (await $.env.get('CMUX_SURFACE_ID')) ?? workspace
-  const path = `${home}/.claude/flowmap/${key}.html`
-  await $.fs.write(path, html)
-  const url = `file://${path}?t=${await $.clock.now()}`
+  const url = toDataUrl(html)
 
   const current = await read($, browser)
   if (current) {
     const moved = await $.process.run([cmux, 'browser', current, 'navigate', url])
     if (moved.exitCode === 0) return
   }
-  const opened = await $.process.run([
-    cmux, '--id-format', 'uuids', 'browser', 'open-split', url, '--workspace', workspace,
-  ])
-  const surface = /surface=(\S+)/.exec(opened.stdout)?.[1] ?? null
+  const opened = await $.process.run([cmux, 'browser', 'open-split', url])
+  const surface = parseSurface(opened.stdout)
   if (opened.exitCode !== 0 || !surface) {
-    $.ui.toast(`流程圖：無法開啟 cmux 瀏覽器窗格（${opened.stderr.trim() || opened.exitCode}）`)
+    $.ui.toast(`圖解：無法開啟 cmux 瀏覽器窗格（${(opened.stderr || opened.stdout).trim() || opened.exitCode}）`)
     return
   }
   await update($, browser, () => surface)

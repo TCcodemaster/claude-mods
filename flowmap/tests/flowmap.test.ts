@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { JUDGE, parseReply } from '../hooks/flow'
+import { JUDGE, parseReply, parseSurface } from '../hooks/flow'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -63,8 +63,9 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 n
   await clock.advance(1)
   await clock.advance(1)
   expect(seen.prompts.length).toBe(1)
-  expect(seen.files).toEqual(['/home/t/.claude/flowmap/ws-1.html'])
-  expect(seen.argv[0]?.slice(0, 5)).toEqual(['/bin/cmux', '--id-format', 'uuids', 'browser', 'open-split'])
+  expect(seen.files).toEqual([])
+  expect(seen.argv[0]?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
+  expect(seen.argv[0]?.[3]?.startsWith('data:text/html;charset=utf-8,')).toBe(true)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: 'flowmap', surface, component: 'Pane', requestId: 'flowmap', props: {} as never })
     const drawn = JSON.stringify(await pane.drawn())
@@ -107,4 +108,11 @@ test('Haiku 判斷不需要圖時不產生', async ($, on) => {
   await clock.advance(1)
   expect(seen.judged).toBe(1)
   expect(seen.prompts.length).toBe(0)
+})
+
+test('本機版與遠端版 cmux 的輸出都解析得到窗格', () => {
+  expect(parseSurface('OK surface=surface:44 pane=pane:8 placement=split')).toBe('surface:44')
+  expect(parseSurface('{\n  "surface_id" : "B8E3-11",\n  "pane_id" : "P1"\n}')).toBe('B8E3-11')
+  expect(parseSurface('{"surface_ref": "surface:9"}')).toBe('surface:9')
+  expect(parseSurface('Error: unknown command')).toBe(null)
 })

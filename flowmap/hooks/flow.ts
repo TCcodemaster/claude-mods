@@ -164,6 +164,22 @@ function outlineOf(diagram: string, mermaid: string): string[] {
   return lines.map(line => line.trim().replace(/"/g, ''))
 }
 
+// 本機版 cmux 回「OK surface=surface:7 ...」，遠端版回 JSON（surface_id 或 surface_ref）。
+export function parseSurface(stdout: string): string | null {
+  try {
+    const data = JSON.parse(stdout) as { surface_id?: unknown; surface_ref?: unknown }
+    const id = data.surface_id ?? data.surface_ref
+    if (typeof id === 'string' && id !== '') return id
+  } catch {
+    // 不是 JSON，改用文字格式解析。
+  }
+  return /surface=(\S+)/.exec(stdout)?.[1] ?? null
+}
+
+export function toDataUrl(html: string): string {
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+}
+
 export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
