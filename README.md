@@ -4,7 +4,7 @@
 
 | mod | 功能 | 指令 |
 |---|---|---|
-| flowmap | 長回應結束後由 Haiku 判斷是否值得畫圖，值得就產生 Mermaid 圖，顯示在 cmux 瀏覽器窗格 | `/flow`、`/flow hide`、`/flow on\|off`、`/flow web on\|off` |
+| flowmap | 長回應結束後由 Haiku 判斷是否值得畫圖，值得就由主模型產生 Mermaid 圖，顯示在 cmux 瀏覽器窗格 | `/flow`、`/flow hide`、`/flow on\|off`、`/flow web on\|off` |
 | gitgraph | 仿 GitHub Desktop 的提交列表，可同時勾選多條分支比對 | `/branches`、`/branches 分支 分支`、`/branches all`、`/branches hide` |
 
 ## 安裝
@@ -44,7 +44,7 @@
 
 - 目前只在 macOS 上測試過。
 - 圖的頁面從 jsDelivr 載入 Mermaid，需要網路。
-- 判斷與畫圖會呼叫 Haiku，用的是使用者自己的 Claude 額度。
+- 判斷要不要畫用 Haiku，畫圖用對話當下的主模型（沿用快取），都算在使用者自己的 Claude 額度。
 - gitgraph 只需要 git；它的面板在 VS Code 擴充套件裡不會顯示，只能在終端機裡使用。
 
 ## 測試

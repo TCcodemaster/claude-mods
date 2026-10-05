@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { JUDGE, parseReply, parseSurface } from '../hooks/flow'
+import { checkFlow, JUDGE, parseReply, parseSurface } from '../hooks/flow'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -31,10 +31,10 @@ function setup(on: On, seen: Seen) {
     return { value: { exitCode: 0, stdout: 'OK surface=abc-123 pane=p', stderr: '' } as never }
   })
   on('model.complete', (_$, e) => {
-    if (e.system === JUDGE) {
-      seen.judged += 1
-      return { value: { isAnswered: true, text: seen.verdict, usage } }
-    }
+    seen.judged += 1
+    return { value: { isAnswered: true, text: e.system === JUDGE ? seen.verdict : '', usage } }
+  })
+  on('model.fork', (_$, e) => {
     seen.prompts.push(e.prompt)
     return { value: { isAnswered: true, text: REPLY, usage } }
   })
@@ -131,7 +131,8 @@ test('不在 cmux 也不在 VS Code 時不開任何瀏覽器', async ($, on) => 
     seen.argv.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
   })
-  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
+  on('model.fork', () => ({ value: { isAnswered: true, text: REPLY, usage } }))
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
@@ -154,7 +155,8 @@ test('在 VS Code 裡沒裝檢視器時渲染成 PNG 並用 VS Code 打開', asy
     seen.argv.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
   })
-  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
+  on('model.fork', () => ({ value: { isAnswered: true, text: REPLY, usage } }))
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
@@ -178,10 +180,44 @@ test('在 VS Code 裡裝了檢視器時寫出網頁給它顯示', async ($, on) 
     seen.argv.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
   })
-  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
+  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
+  on('model.fork', () => ({ value: { isAnswered: true, text: REPLY, usage } }))
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
   expect(seen.files).toEqual(['/home/t/.claude/flowmap/vscode-42.html'])
   expect(seen.argv).toEqual([])
+})
+
+test('檢查出判斷少分支、節點過多與孤立節點', () => {
+  const bad = parseReply(['摘要：壞圖。', '```mermaid', 'flowchart TD',
+    '  A["開始"]:::start --> B{"准許?"}:::decide', '  B -->|否| C["自訴"]:::step', '  Z["孤立"]:::step', '```'].join('\n'))!
+  const problems = checkFlow(bad)
+  expect(problems.some(p => p.includes('准許?') && p.includes('1 條分支'))).toBe(true)
+  expect(problems.some(p => p.includes('孤立'))).toBe(true)
+  const many = parseReply(['摘要：多。', '```mermaid', 'flowchart LR',
+    '  ' + Array.from({ length: 12 }, (_, i) => `N${i}["步驟${i}"]:::step`).join(' --> '), '```'].join('\n'))!
+  expect(checkFlow(many).some(p => p.includes('12 個'))).toBe(true)
+  expect(checkFlow(parseReply(REPLY)!)).toEqual([])
+})
+
+test('第一次畫錯時帶著問題清單重畫一次', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { HOME: '/home/t' })
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  const BAD = ['摘要：壞圖。', '```mermaid', 'flowchart TD', '  A["開始"]:::start --> B{"准許?"}:::decide', '  B -->|否| C["自訴"]:::step', '```'].join('\n')
+  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
+  on('model.fork', (_$, e) => {
+    seen.prompts.push(e.prompt)
+    return { value: { isAnswered: true, text: seen.prompts.length === 1 ? BAD : REPLY, usage } }
+  })
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  expect(seen.prompts.length).toBe(2)
+  expect(seen.prompts[1]).toContain('只有 1 條分支')
+  const pane = await $.ui.mount({ plugin: 'flowmap', surface: 'terminal', component: 'Pane', requestId: 'flowmap', props: {} as never })
+  expect(JSON.stringify(await pane.drawn())).toContain('有快取?')
 })

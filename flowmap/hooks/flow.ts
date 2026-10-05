@@ -49,7 +49,11 @@ export const SYSTEM = [
   '共同規則：文字用繁體中文短句，每個標籤不超過 12 個字；指令、檔名、API 名稱保留原文；整張圖最多 8 個元素；不要寫 style、classDef 或註解。',
   'flowchart 額外規則：',
   '- 節點代號用 A、B、C 這類英文字母，標籤一律加雙引號，例如 A["讀取設定"]。',
-  '- 判斷用菱形 {"…?"}，分支邊加標籤，例如 C -->|是| D。',
+  '- 判斷用菱形 {"…?"}，每個判斷都要畫出所有分支（至少兩條），每條分支都加標籤，例如 C -->|是| D、C -->|否| E。',
+  '- 箭頭只代表「接下來會發生」。並列的類別或管道從同一個上層節點各自分出去，不要用箭頭串成先後。',
+  '- 期限、條件、審查範圍這類說明，寫進同一個節點的標籤裡，不要拆成下一個節點。',
+  '- 只畫原文有寫的內容，不要補原文沒有的步驟或結論。',
+  '- 節點數超過 8 個時，先合併或省略細節，寧可少畫。',
   '- 每個節點第一次出現時加上類別：:::start 起點、:::step 一般步驟、:::decide 判斷、:::done 結果、:::warn 風險或注意事項。',
   '各種圖的語法範本（照抄結構，不要自創語法）：',
   'sequenceDiagram 範本：\nsequenceDiagram\n  participant A as 使用者\n  participant B as 伺服器\n  A->>B: 送出請求\n  B-->>A: 回傳結果',
@@ -58,6 +62,30 @@ export const SYSTEM = [
   'quadrantChart 範本（座標一定要用中括號，數值介於 0 到 1）：\nquadrantChart\n  title 標題\n  x-axis 低成本 --> 高成本\n  y-axis 低效益 --> 高效益\n  quadrant-1 優先做\n  quadrant-2 值得投資\n  quadrant-3 暫緩\n  quadrant-4 快速見效\n  方案甲: [0.3, 0.6]',
   'erDiagram 範本：\nerDiagram\n  USER ||--o{ ORDER : places\n  USER {\n    int id\n  }',
 ].join('\n')
+
+// 檢查流程圖常見的錯誤，回傳問題清單；空陣列代表沒有問題。
+export const MAX_NODES = 10
+export function checkFlow(parsed: Parsed): string[] {
+  if (parsed.diagram !== 'flowchart') return []
+  const problems: string[] = []
+  if (parsed.nodes.length > MAX_NODES) {
+    problems.push(`節點有 ${parsed.nodes.length} 個，超過 ${MAX_NODES} 個，請合併或省略細節。`)
+  }
+  for (const node of parsed.nodes) {
+    const outs = parsed.edges.filter(edge => edge.from === node.id)
+    const touched = outs.length > 0 || parsed.edges.some(edge => edge.to === node.id)
+    if (node.kind === 'decide' && outs.length < 2) {
+      problems.push(`判斷「${node.label}」只有 ${outs.length} 條分支，每個判斷都要畫出所有分支。`)
+    }
+    if (node.kind === 'decide' && outs.some(edge => edge.label === '')) {
+      problems.push(`判斷「${node.label}」有分支沒有標籤。`)
+    }
+    if (!touched && parsed.nodes.length > 1) {
+      problems.push(`節點「${node.label}」沒有任何連線。`)
+    }
+  }
+  return problems
+}
 
 export type Parsed = { summary: string; mermaid: string; diagram: string; nodes: FlowNode[]; edges: FlowEdge[]; outline: string[] }
 

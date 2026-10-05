@@ -2,7 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { FlowMap } from '../types'
-import { buildHtml, JUDGE, mermaidForImage, parseReply, parseSurface, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
+import { buildHtml, checkFlow, JUDGE, mermaidForImage, parseReply, parseSurface, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
+import type { Parsed } from './flow'
 
 const PANE = 'flowmap'
 const TITLE = '圖解'
@@ -108,23 +109,33 @@ async function isVSCode($: EngineInterface): Promise<boolean> {
   return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-vscode' || (await $.env.get('TERM_PROGRAM')) === 'vscode'
 }
 
-async function generate($: EngineInterface, answer: string): Promise<void> {
+// 畫圖用這次對話的主模型：fork 接在對話後面，看得到完整上下文，前段走快取。
+const FORK_HEAD = [
+  '（這是圖解外掛送出的內部請求，不是使用者的訊息，不要使用任何工具。）',
+  '請把你上一則回應整理成一張 Mermaid 圖，依照以下規則：',
+].join('\n')
+
+async function draw($: EngineInterface, extra: string): Promise<Parsed | string> {
+  const reply = await $.model.fork({ prompt: `${FORK_HEAD}\n\n${SYSTEM}${extra}` })
+  if (!reply.isAnswered) return `圖解產生失敗：${reply.reason}`
+  return parseReply(reply.text) ?? '圖解產生失敗：模型沒有回傳 Mermaid 圖'
+}
+
+async function generate($: EngineInterface): Promise<void> {
   await update($, isBusy, () => true)
-  const reply = await $.model.complete({
-    model: 'haiku',
-    system: SYSTEM,
-    prompt: `請整理以下回應：\n\n${answer.slice(0, 20000)}`,
-    maxTokens: 2048,
-    timeoutMs: 60000,
-  })
-  await update($, isBusy, () => false)
-  if (!reply.isAnswered) {
-    $.ui.toast(`圖解產生失敗：${reply.reason}`)
-    return
+  let parsed = await draw($, '')
+  // 檢查出問題就把問題清單交回去重畫一次；第二次還有問題就照用。
+  const problems = typeof parsed === 'string' ? [] : checkFlow(parsed)
+  if (typeof parsed !== 'string' && problems.length > 0) {
+    const retry = await draw(
+      $,
+      `\n\n你剛才畫的圖：\n\`\`\`mermaid\n${parsed.mermaid}\n\`\`\`\n\n有以下問題，請修正後重畫：\n${problems.map(p => `- ${p}`).join('\n')}`,
+    )
+    if (typeof retry !== 'string') parsed = retry
   }
-  const parsed = parseReply(reply.text)
-  if (!parsed) {
-    $.ui.toast('圖解產生失敗：模型沒有回傳 Mermaid 圖')
+  await update($, isBusy, () => false)
+  if (typeof parsed === 'string') {
+    $.ui.toast(parsed)
     return
   }
   const at = await $.clock.now()
@@ -166,10 +177,9 @@ export const register: Register = on => {
       return { text: '已收起圖解面板，輸入 /flow 可再打開。' }
     }
     await $.ui.open({ id: PANE, title: TITLE })
-    const answer = await read($, lastAnswer)
-    if (answer === '') return { text: '目前還沒有可以整理的回應。' }
+    if ((await read($, lastAnswer)) === '') return { text: '目前還沒有可以整理的回應。' }
     $.clock.after(0, () => {
-      void generate($, answer)
+      void generate($)
     })
 
     return { text: '正在重畫上一則回應的流程圖。' }
@@ -184,7 +194,7 @@ export const register: Register = on => {
       // 判斷與產生都交給計時器跑，不卡住回合結束。
       $.clock.after(0, () => {
         void (async () => {
-          if (await isWorthDrawing($, answer)) await generate($, answer)
+          if (await isWorthDrawing($, answer)) await generate($)
         })()
       })
     }
