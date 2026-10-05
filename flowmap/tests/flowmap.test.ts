@@ -28,7 +28,8 @@ function setup(on: On, seen: Seen) {
   })
   on('process.run', (_$, e) => {
     seen.argv.push([...e.argv])
-    return { value: { exitCode: 0, stdout: 'OK surface=abc-123 pane=p', stderr: '' } as never }
+    const stdout = e.argv.includes('eval') ? 'flowmap-ok' : 'OK surface=abc-123 pane=p'
+    return { value: { exitCode: 0, stdout, stderr: '' } as never }
   })
   on('model.complete', (_$, e) => {
     seen.judged += 1
@@ -76,7 +77,9 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 n
   await $.turn.complete(answer('流程'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
-  expect(seen.argv[1]?.slice(0, 4)).toEqual(['/bin/cmux', 'browser', 'abc-123', 'navigate'])
+  expect(seen.argv[1]?.slice(0, 4)).toEqual(['/bin/cmux', 'browser', 'abc-123', 'eval'])
+  expect(seen.argv[1]?.[4]).toContain('flowmapRender')
+  expect(seen.argv.length).toBe(2)
 })
 
 test('短回應與子代理回應不產生', async ($, on) => {

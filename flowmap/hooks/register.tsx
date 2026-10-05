@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { FlowMap } from '../types'
-import { buildHtml, checkFlow, JUDGE, mermaidForImage, parseReply, parseSurface, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
+import { buildHtml, checkFlow, JUDGE, mermaidForImage, parseReply, parseSurface, renderScript, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
 
 const PANE = 'flowmap'
@@ -44,18 +44,19 @@ async function isWorthDrawing($: EngineInterface, answer: string): Promise<boole
 // 把頁面送進 cmux 的瀏覽器窗格；窗格被關掉就重開一個。
 // 頁面直接編進 data URL，不寫檔：SSH 到遠端時，本機的 cmux 瀏覽器讀不到伺服器上的檔案。
 // 只用本機版與遠端版 cmux 都認得的參數，輸出則兩種格式都接受。
-async function showInCmux($: EngineInterface, html: string): Promise<void> {
+// 已經開著的窗格不用 navigate 換網址（cmux 會把 data URL 當成搜尋字詞），
+// 改用 eval 呼叫頁面內建的換圖函式。
+async function showInCmux($: EngineInterface, html: string, script: string): Promise<void> {
   // 不在 cmux 裡就不開任何瀏覽器，圖只留在 /flow 面板。
   if (!(await $.env.get('CMUX_WORKSPACE_ID'))) return
   const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
-  const url = toDataUrl(html)
 
   const current = await read($, browser)
   if (current) {
-    const moved = await $.process.run([cmux, 'browser', current, 'navigate', url])
-    if (moved.exitCode === 0) return
+    const swapped = await $.process.run([cmux, 'browser', current, 'eval', script])
+    if (swapped.exitCode === 0 && swapped.stdout.includes('flowmap-ok')) return
   }
-  const opened = await $.process.run([cmux, 'browser', 'open-split', url])
+  const opened = await $.process.run([cmux, 'browser', 'open-split', toDataUrl(html)])
   const surface = parseSurface(opened.stdout)
   if (opened.exitCode !== 0 || !surface) {
     $.ui.toast(`圖解：無法開啟 cmux 瀏覽器窗格（${(opened.stderr || opened.stdout).trim() || opened.exitCode}）`)
@@ -145,11 +146,12 @@ async function generate($: EngineInterface): Promise<void> {
     const inCmux = Boolean(await $.env.get('CMUX_WORKSPACE_ID'))
     const stamp = new Date(at).toLocaleString('zh-TW', { hour12: false })
     const html = buildHtml(parsed.summary, parsed.mermaid, stamp)
+    const script = renderScript(parsed.summary, parsed.mermaid, stamp)
     if (!inCmux && (await isVSCode($))) {
       if (await showInViewer($, html)) return
       if (await showInVSCode($, mermaidForImage(parsed.summary, parsed.mermaid, parsed.diagram))) return
     }
-    await showInCmux($, html)
+    await showInCmux($, html, script)
   }
 }
 

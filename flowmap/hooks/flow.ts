@@ -242,6 +242,18 @@ export function escapeHtml(text: string): string {
 }
 
 // 給 cmux 瀏覽器窗格的頁面；配色依系統深淺色切換。
+// 換圖函式的參數：JSON 字串化，並把 < 換掉，避免提早結束 <script>。
+export function renderArgs(summary: string, mermaid: string, stamp: string): string {
+  return [summary.replace(/^摘要[:：]\s*/, ''), mermaid, stamp]
+    .map(value => JSON.stringify(value).replace(/</g, '\\u003c'))
+    .join(', ')
+}
+
+// 在已經開著的圖解頁面上換圖的 JavaScript；回傳 ok 代表頁面認得換圖函式。
+export function renderScript(summary: string, mermaid: string, stamp: string): string {
+  return `window.flowmapRender ? (window.flowmapRender(${renderArgs(summary, mermaid, stamp)}), 'flowmap-ok') : 'flowmap-missing'`
+}
+
 export function buildHtml(summary: string, mermaid: string, stamp: string): string {
   return `<!doctype html>
 <html lang="zh-Hant"><head><meta charset="utf-8">
@@ -269,9 +281,9 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   pre.raw { margin: 0; white-space: pre-wrap; font: 13px/1.6 ui-monospace, Menlo, monospace; }
 </style></head>
 <body><main>
-<p class="summary">${escapeHtml(summary.replace(/^摘要[:：]\s*/, ''))}</p>
-<p class="stamp">${escapeHtml(stamp)}<span class="zoom"><button id="zout" title="縮小">－</button><span id="zval">100%</span><button id="zin" title="放大">＋</button></span></p>
-<div class="card"><pre class="mermaid" id="src">${escapeHtml(mermaid)}</pre></div>
+<p class="summary" id="summary"></p>
+<p class="stamp"><span id="stamp"></span><span class="zoom"><button id="zout" title="縮小">－</button><span id="zval">100%</span><button id="zin" title="放大">＋</button></span></p>
+<div class="card" id="card"></div>
 <div class="legend" id="legend"></div>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
@@ -283,14 +295,8 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
     : { start: ['#e3efff', '#2f6fde'], step: ['#f3f4f6', '#8b95a5'], decide: ['#fff4d6', '#d99a00'],
         done: ['#e3f7ea', '#1f9d55'], warn: ['#ffe7e5', '#d63b2f'] }
   const names = { start: '起點', step: '步驟', decide: '判斷', done: '結果', warn: '注意' }
-  const src = document.getElementById('src')
   const defs = Object.entries(palette).map(([k, [fill, stroke]]) =>
     'classDef ' + k + ' fill:' + fill + ',stroke:' + stroke + ',stroke-width:2px,color:' + (dark ? '#e6e6e6' : '#1f2328'))
-  if (/^(flowchart|graph)\\s/.test(src.textContent.trim())) {
-    src.textContent = src.textContent + '\\n' + defs.join('\\n')
-    document.getElementById('legend').innerHTML = Object.entries(palette)
-      .map(([k, [, stroke]]) => '<span style="--c:' + stroke + '">' + names[k] + '</span>').join('')
-  }
   mermaid.initialize({ startOnLoad: false, theme: 'base', darkMode: dark, securityLevel: 'strict',
     flowchart: { curve: 'basis', htmlLabels: true, nodeSpacing: 36, rankSpacing: 48, useMaxWidth: false },
     sequence: { useMaxWidth: false }, state: { useMaxWidth: false }, timeline: { useMaxWidth: false },
@@ -306,7 +312,7 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   try { scale = Number(localStorage.getItem('flowmap-zoom')) || 1 } catch (e) {}
   // 用 SVG 本身的寬度縮放；CSS zoom 在 WebKit 會切掉節點裡的文字。
   const applyZoom = () => {
-    const svg = src.querySelector('svg')
+    const svg = document.querySelector('#card svg')
     const box = svg && svg.viewBox && svg.viewBox.baseVal
     if (svg && box && box.width) {
       svg.style.width = Math.round(box.width * scale) + 'px'
@@ -318,17 +324,30 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   const step = d => { scale = Math.min(2, Math.max(0.5, Math.round((scale + d) * 10) / 10)); applyZoom() }
   document.getElementById('zin').onclick = () => step(0.1)
   document.getElementById('zout').onclick = () => step(-0.1)
+  // 換圖：更新摘要與時間，重畫 Mermaid；外掛之後用 eval 呼叫它，不必重新載入頁面。
+  let seq = 0
+  window.flowmapRender = (summary, code, stamp) => {
+    document.getElementById('summary').textContent = summary
+    document.getElementById('stamp').textContent = stamp
+    const isFlow = /^(flowchart|graph)\\s/.test(code.trim())
+    document.getElementById('legend').innerHTML = isFlow
+      ? Object.entries(palette).map(([k, [, stroke]]) => '<span style="--c:' + stroke + '">' + names[k] + '</span>').join('')
+      : ''
+    const full = isFlow ? code + '\\n' + defs.join('\\n') : code
+    const card = document.getElementById('card')
+    seq += 1
+    const id = 'flowmap-' + seq
+    return mermaid.parse(full)
+      .then(() => mermaid.render(id, full))
+      .then(({ svg }) => { card.innerHTML = '<pre class="mermaid">' + svg + '</pre>'; applyZoom() })
+      .catch(err => {
+        card.innerHTML = '<p class="stamp">這張圖的語法有誤，改顯示原始內容。輸入 /flow 可以重畫。</p><pre class="raw"></pre>'
+        card.querySelector('.raw').textContent = code
+        console.error(err)
+      })
+  }
   applyZoom()
-  const code = src.textContent
-  mermaid.parse(code)
-    .then(() => mermaid.run({ nodes: [src] }))
-    .then(() => applyZoom())
-    .catch(err => {
-      const card = src.parentElement
-      card.innerHTML = '<p class="stamp">這張圖的語法有誤，改顯示原始內容。輸入 /flow 可以重畫。</p><pre class="raw"></pre>'
-      card.querySelector('.raw').textContent = code.split('\\nclassDef')[0]
-      console.error(err)
-    })
+  window.flowmapRender(${renderArgs(summary, mermaid, stamp)})
 </script>
 </body></html>
 `
