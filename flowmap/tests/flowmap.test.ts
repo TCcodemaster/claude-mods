@@ -117,7 +117,7 @@ test('本機版與遠端版 cmux 的輸出都解析得到窗格', () => {
   expect(parseSurface('Error: unknown command')).toBe(null)
 })
 
-test('不在 cmux 時改用系統瀏覽器開啟', async ($, on) => {
+test('不在 cmux 也不在 VS Code 時不開任何瀏覽器', async ($, on) => {
   const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
   const clock = mock.clock(on)
   mock.store(on)
@@ -135,8 +135,9 @@ test('不在 cmux 時改用系統瀏覽器開啟', async ($, on) => {
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
-  expect(seen.files).toEqual(['/home/t/.claude/flowmap/latest.html'])
-  expect(seen.argv).toEqual([['open', '-g', '/home/t/.claude/flowmap/latest.html']])
+  expect(seen.prompts.length).toBe(0)
+  expect(seen.files).toEqual([])
+  expect(seen.argv).toEqual([])
 })
 
 test('在 VS Code 裡沒裝檢視器時渲染成 PNG 並用 VS Code 打開', async ($, on) => {

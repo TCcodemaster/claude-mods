@@ -38,7 +38,7 @@
 | cmux | cmux 右邊的瀏覽器窗格 |
 | VS Code，有裝檢視器 | VS Code 旁邊一欄 |
 | VS Code，沒裝檢視器 | 用 mermaid-cli 與 Chrome 渲染成 PNG，在 VS Code 開啟 |
-| 其他 | 系統預設瀏覽器 |
+| 其他 | 不另外開視窗，輸入 `/flow` 在面板裡看 |
 
 ## 依賴與限制
 

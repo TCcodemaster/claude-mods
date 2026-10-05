@@ -44,10 +44,8 @@ async function isWorthDrawing($: EngineInterface, answer: string): Promise<boole
 // 頁面直接編進 data URL，不寫檔：SSH 到遠端時，本機的 cmux 瀏覽器讀不到伺服器上的檔案。
 // 只用本機版與遠端版 cmux 都認得的參數，輸出則兩種格式都接受。
 async function showInCmux($: EngineInterface, html: string): Promise<void> {
-  if (!(await $.env.get('CMUX_WORKSPACE_ID'))) {
-    await showInBrowser($, html)
-    return
-  }
+  // 不在 cmux 裡就不開任何瀏覽器，圖只留在 /flow 面板。
+  if (!(await $.env.get('CMUX_WORKSPACE_ID'))) return
   const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
   const url = toDataUrl(html)
 
@@ -70,7 +68,7 @@ const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 
 // 在 VS Code 裡（擴充套件或內建終端機）：用 mermaid-cli 借 Chrome 渲染成 PNG，
 // 再用 VS Code 的圖片檢視器打開。檔名固定，已開著的分頁會自動換成新圖。
-// 少了 mermaid-cli 或 Chrome 就回傳 false，改走系統瀏覽器。
+// 少了 mermaid-cli 或 Chrome 就回傳 false。
 async function showInVSCode($: EngineInterface, source: string): Promise<boolean> {
   const home = await $.env.get('HOME')
   if (!home) return false
@@ -108,20 +106,6 @@ async function showInViewer($: EngineInterface, html: string): Promise<boolean> 
 
 async function isVSCode($: EngineInterface): Promise<boolean> {
   return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-vscode' || (await $.env.get('TERM_PROGRAM')) === 'vscode'
-}
-
-// 不在 cmux 裡（例如 VS Code 擴充套件，它不畫 mod 的面板）：寫成檔案，用系統預設瀏覽器在背景打開。
-// 只在 macOS 上有 open 指令；其他系統或遠端伺服器上打不開就靜默略過。
-async function showInBrowser($: EngineInterface, html: string): Promise<void> {
-  const home = await $.env.get('HOME')
-  if (!home) return
-  const path = `${home}/.claude/flowmap/latest.html`
-  await $.fs.write(path, html)
-  try {
-    await $.process.run(['open', '-g', path])
-  } catch {
-    // 沒有 open 指令，維持只寫檔。
-  }
 }
 
 async function generate($: EngineInterface, answer: string): Promise<void> {
