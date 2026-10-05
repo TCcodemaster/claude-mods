@@ -33,28 +33,31 @@ export const JUDGE = [
 export const SYSTEM = [
   '你負責把一段技術回應整理成一張最適合的 Mermaid 圖。',
   '輸出格式固定如下，不要加任何其他文字：',
-  '第一行：以「摘要：」開頭，用一句完整的繁體中文句子說明重點。',
+  '第一行：以「摘要：」開頭，用一句完整的繁體中文句子說明重點，不超過 40 個字。',
   '接著是一個 ```mermaid 程式碼區塊。',
   '目的是讓人不讀原文也能看懂完整流程：主軸要有，關鍵的條件、分支、例外處理和產出也要畫出來。只省略純粹的措辭與重複說明。',
   '先依內容挑圖的種類：',
   '- 有先後步驟或判斷分支：flowchart TD。',
   '- 分類、比較、選項整理：flowchart TD 的樹狀圖，根節點在上，每層最多 5 個分支，最多三層。',
-  '- 只有 3 到 6 個並列步驟且沒有分支：flowchart LR 橫向。',
+  '- 多個方案比較：樹狀圖，每個方案一個節點，標籤寫最關鍵的取捨，不要把每個優缺點拆成節點；原文有建議就加一個結論節點。',
+  '- 除錯或追查報告：最多 8 個節點，畫「症狀、原因、修法、結果」這條主線；追查過程合併成一個節點，修法有幾項就分幾支。',
+  '- 分階段的計畫或有編號的項目清單（沒有月份或日期）：樹狀圖，根節點是計畫名稱，第二層是各階段，第三層是每個階段底下的項目。原文列了幾項就畫幾項，不受每層分支數限制，不要只畫階段。',
+  '- 只有 3 到 6 個並列步驟、沒有分支，而且每步底下沒有子項目：flowchart LR 橫向。',
   '- 多個角色或系統之間來回呼叫：sequenceDiagram。',
   '- 狀態之間的轉換：stateDiagram-v2。',
-  '- 依時間或階段排列的事件：timeline。',
+  '- 依月份、日期排列的時程：timeline，優先於樹狀圖。',
   '- 兩個維度的比較或優先順序：quadrantChart。',
-  '- 資料表與關聯：erDiagram。',
+  '- 資料表與關聯：erDiagram，每張表只列主鍵、外鍵和最多 2 個關鍵欄位。',
   '- 不要使用 mindmap。',
-  '共同規則：文字用繁體中文短句，每個標籤不超過 16 個字；指令、檔名、API 名稱保留原文；整張圖以 8 到 16 個元素為宜，原文內容少時不要硬湊；不要寫 style、classDef 或註解。',
+  '共同規則：文字用繁體中文短句，每個標籤不超過 16 個字；指令、檔名、API 名稱保留原文；元素數量跟著原文走：原文只有三步就畫三步，一般圖不超過 16 個元素，分階段計畫或編號清單最多 30 個；不要寫 style、classDef 或註解。',
   'flowchart 額外規則：',
   '- 節點代號用 A、B、C 這類英文字母，標籤一律加雙引號，例如 A["讀取設定"]。',
-  '- 判斷用菱形 {"…?"}，每個判斷都要畫出所有分支（至少兩條），每條分支都加標籤，例如 C -->|是| D、C -->|否| E。',
+  '- 只有原文明確寫出兩種以上結果時才畫判斷。判斷用菱形 {"…?"}，每個判斷都要畫出所有分支（至少兩條），每條分支都加標籤，例如 C -->|是| D、C -->|否| E。',
   '- 箭頭只代表「接下來會發生」。並列的類別或管道從同一個上層節點各自分出去，不要用箭頭串成先後。',
   '- 期限、條件、審查範圍這類說明，寫進同一個節點的標籤裡，不要拆成下一個節點。',
-  '- 只畫原文有寫的內容，不要補原文沒有的步驟或結論。',
+  '- 只畫原文有寫的內容。原文沒寫的判斷、迴圈、等待或重試都不要自己加，也不要把一步拆成好幾個節點。',
   '- 原文有失敗、重試、回退或例外路徑時要畫出來，不要只畫順利的那條路。',
-  '- 節點數超過 16 個時，才合併次要細節。',
+  '- 節點數超過上限時，才合併次要細節；編號清單的項目不要合併，改成只留項目名稱。',
   '- 每個節點第一次出現時加上類別：:::start 起點、:::step 一般步驟、:::decide 判斷、:::done 結果、:::warn 風險或注意事項。',
   '各種圖的語法範本（照抄結構，不要自創語法）：',
   'sequenceDiagram 範本：\nsequenceDiagram\n  participant A as 使用者\n  participant B as 伺服器\n  A->>B: 送出請求\n  B-->>A: 回傳結果',
@@ -65,7 +68,7 @@ export const SYSTEM = [
 ].join('\n')
 
 // 檢查流程圖常見的錯誤，回傳問題清單；空陣列代表沒有問題。
-export const MAX_NODES = 18
+export const MAX_NODES = 32
 export function checkFlow(parsed: Parsed): string[] {
   if (parsed.diagram !== 'flowchart') return []
   const problems: string[] = []
@@ -155,9 +158,10 @@ export function parseReply(text: string): Parsed | null {
 
   // 用解析結果重寫一份乾淨的 Mermaid，避開模型多打空白或符號造成的語法錯誤。
   // 同一層分支太多時，直向排會太寬；改橫向讓分支上下堆疊，適合窄窗格。
+  // 但主線很長時改橫向會拉得太寬，所以只在層數不多時才改。
   const fanOut = Math.max(0, ...nodes.map(node => edges.filter(edge => edge.from === node.id).length))
   const asked = /^(?:flowchart|graph)\s+(TD|TB|LR|RL|BT)/.exec(mermaid)?.[1] ?? 'TD'
-  const direction = fanOut > 3 ? 'LR' : asked
+  const direction = fanOut > 3 && depthOf(nodes, edges) <= 4 ? 'LR' : asked
   const quote = (text: string) => text.replace(/"/g, "'")
   const clean = [
     `flowchart ${direction}`,
@@ -169,6 +173,18 @@ export function parseReply(text: string): Parsed | null {
     ...edges.map(edge => `  ${edge.from} -->${edge.label === '' ? '' : `|"${quote(edge.label)}"|`} ${edge.to}`),
   ].join('\n')
   return { summary: summaryLine.trim(), mermaid: clean, diagram: 'flowchart', nodes, edges, outline: [] }
+}
+
+// 從沒有入邊的節點往下走，算出最長路徑有幾層；遇到迴圈不重複走。
+export function depthOf(nodes: FlowNode[], edges: FlowEdge[]): number {
+  const level = new Map<string, number>()
+  let frontier = nodes.filter(node => !edges.some(edge => edge.to === node.id)).map(node => node.id)
+  if (frontier.length === 0) frontier = nodes.slice(0, 1).map(node => node.id)
+  for (let depth = 1; frontier.length > 0; depth += 1) {
+    for (const id of frontier) level.set(id, depth)
+    frontier = [...new Set(edges.filter(edge => frontier.includes(edge.from) && !level.has(edge.to)).map(edge => edge.to))]
+  }
+  return Math.max(0, ...level.values())
 }
 
 // 模型常把象限圖座標寫成「名稱: 0.3, 0.6」，補成 Mermaid 要求的中括號。
