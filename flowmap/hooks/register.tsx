@@ -44,7 +44,10 @@ async function isWorthDrawing($: EngineInterface, answer: string): Promise<boole
 // 頁面直接編進 data URL，不寫檔：SSH 到遠端時，本機的 cmux 瀏覽器讀不到伺服器上的檔案。
 // 只用本機版與遠端版 cmux 都認得的參數，輸出則兩種格式都接受。
 async function showInCmux($: EngineInterface, html: string): Promise<void> {
-  if (!(await $.env.get('CMUX_WORKSPACE_ID'))) return
+  if (!(await $.env.get('CMUX_WORKSPACE_ID'))) {
+    await showInBrowser($, html)
+    return
+  }
   const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
   const url = toDataUrl(html)
 
@@ -60,6 +63,20 @@ async function showInCmux($: EngineInterface, html: string): Promise<void> {
     return
   }
   await update($, browser, () => surface)
+}
+
+// 不在 cmux 裡（例如 VS Code 擴充套件，它不畫 mod 的面板）：寫成檔案，用系統預設瀏覽器在背景打開。
+// 只在 macOS 上有 open 指令；其他系統或遠端伺服器上打不開就靜默略過。
+async function showInBrowser($: EngineInterface, html: string): Promise<void> {
+  const home = await $.env.get('HOME')
+  if (!home) return
+  const path = `${home}/.claude/flowmap/latest.html`
+  await $.fs.write(path, html)
+  try {
+    await $.process.run(['open', '-g', path])
+  } catch {
+    // 沒有 open 指令，維持只寫檔。
+  }
 }
 
 async function generate($: EngineInterface, answer: string): Promise<void> {

@@ -116,3 +116,25 @@ test('本機版與遠端版 cmux 的輸出都解析得到窗格', () => {
   expect(parseSurface('{"surface_ref": "surface:9"}')).toBe('surface:9')
   expect(parseSurface('Error: unknown command')).toBe(null)
 })
+
+test('不在 cmux 時改用系統瀏覽器開啟', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { HOME: '/home/t' })
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('fs.write', (_$, e) => {
+    seen.files.push(e.path)
+    return { value: undefined }
+  })
+  on('process.run', (_$, e) => {
+    seen.argv.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
+  })
+  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  expect(seen.files).toEqual(['/home/t/.claude/flowmap/latest.html'])
+  expect(seen.argv).toEqual([['open', '-g', '/home/t/.claude/flowmap/latest.html']])
+})
