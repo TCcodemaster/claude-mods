@@ -1,0 +1,211 @@
+import { atom, read, update } from 'claude-code'
+import type { EngineInterface, Register } from 'claude-code'
+
+import type { FlowMap } from '../types'
+import { buildHtml, JUDGE, parseReply, SYSTEM, TERMINAL_COLORS } from './flow'
+
+const PANE = 'flowmap'
+const TITLE = '圖解'
+const map = atom({ plugin: 'flowmap', key: 'map' } as const, null)
+const isBusy = atom({ plugin: 'flowmap', key: 'isBusy' } as const, false)
+const isAuto = atom({ plugin: 'flowmap', key: 'isAuto' } as const, true)
+const isWeb = atom({ plugin: 'flowmap', key: 'isWeb' } as const, true)
+const DIAGRAM_NAMES: Record<string, string> = {
+  mindmap: '心智圖',
+  sequenceDiagram: '時序圖',
+  'stateDiagram-v2': '狀態圖',
+  stateDiagram: '狀態圖',
+  timeline: '時間軸',
+  quadrantChart: '象限圖',
+  erDiagram: '資料表關聯圖',
+}
+const browser = atom({ plugin: 'flowmap', key: 'browser' } as const, null)
+// 存在對話狀態裡，mod 重新載入後 /flow 仍找得到上一則回應。
+const lastAnswer = atom({ plugin: 'flowmap', key: 'lastAnswer' } as const, '')
+
+// 太短的回應直接略過，不必花一次 Haiku 判斷。
+const MIN_CHARS = 300
+
+// 由 Haiku 依內容判斷值不值得畫圖，只回答「是」或「否」。
+async function isWorthDrawing($: EngineInterface, answer: string): Promise<boolean> {
+  if (answer.length < MIN_CHARS) return false
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: JUDGE,
+    prompt: `<回應>\n${answer.slice(0, 12000)}\n</回應>\n\n這則回應值得附一張示意圖嗎？只回答「是」或「否」。`,
+    maxTokens: 8,
+    effort: 'low',
+    timeoutMs: 15000,
+  })
+  return reply.isAnswered && reply.text.trim().startsWith('是')
+}
+
+// 把頁面送進 cmux 的瀏覽器窗格；窗格被關掉就重開一個。
+async function showInCmux($: EngineInterface, html: string): Promise<void> {
+  const workspace = await $.env.get('CMUX_WORKSPACE_ID')
+  const home = await $.env.get('HOME')
+  if (!workspace || !home) return
+  const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
+  const key = (await $.env.get('CMUX_SURFACE_ID')) ?? workspace
+  const path = `${home}/.claude/flowmap/${key}.html`
+  await $.fs.write(path, html)
+  const url = `file://${path}?t=${await $.clock.now()}`
+
+  const current = await read($, browser)
+  if (current) {
+    const moved = await $.process.run([cmux, 'browser', current, 'navigate', url])
+    if (moved.exitCode === 0) return
+  }
+  const opened = await $.process.run([
+    cmux, '--id-format', 'uuids', 'browser', 'open-split', url, '--workspace', workspace,
+  ])
+  const surface = /surface=(\S+)/.exec(opened.stdout)?.[1] ?? null
+  if (opened.exitCode !== 0 || !surface) {
+    $.ui.toast(`流程圖：無法開啟 cmux 瀏覽器窗格（${opened.stderr.trim() || opened.exitCode}）`)
+    return
+  }
+  await update($, browser, () => surface)
+}
+
+async function generate($: EngineInterface, answer: string): Promise<void> {
+  await update($, isBusy, () => true)
+  const reply = await $.model.complete({
+    model: 'haiku',
+    system: SYSTEM,
+    prompt: `請整理以下回應：\n\n${answer.slice(0, 20000)}`,
+    maxTokens: 2048,
+    timeoutMs: 60000,
+  })
+  await update($, isBusy, () => false)
+  if (!reply.isAnswered) {
+    $.ui.toast(`圖解產生失敗：${reply.reason}`)
+    return
+  }
+  const parsed = parseReply(reply.text)
+  if (!parsed) {
+    $.ui.toast('圖解產生失敗：模型沒有回傳 Mermaid 圖')
+    return
+  }
+  const at = await $.clock.now()
+  const next: FlowMap = { ...parsed, at }
+  await update($, map, () => next)
+  if (await read($, isWeb)) {
+    const stamp = new Date(at).toLocaleString('zh-TW', { hour12: false })
+    await showInCmux($, buildHtml(parsed.summary, parsed.mermaid, stamp))
+  }
+}
+
+export const register: Register = on => {
+  on('session.start', async ($, e, next) => {
+    await $.command.register({
+      name: 'flow',
+      description: '圖解：/flow 重畫上一則；/flow hide 收起；/flow on|off 自動產生；/flow web on|off 瀏覽器窗格',
+    })
+    return next(e)
+  })
+
+  on('command.run', { command: 'flow' }, async ($, e) => {
+    const arg = e.args.trim()
+    if (arg === 'on' || arg === 'off') {
+      await update($, isAuto, () => arg === 'on')
+      return { text: arg === 'on' ? '已開啟自動產生流程圖。' : '已關閉自動產生流程圖。' }
+    }
+    if (arg === 'web on' || arg === 'web off') {
+      await update($, isWeb, () => arg === 'web on')
+      return { text: arg === 'web on' ? '流程圖會顯示在 cmux 瀏覽器窗格。' : '流程圖只顯示在終端機面板。' }
+    }
+    if (arg === 'hide') {
+      await $.ui.close({ id: PANE })
+      return { text: '已收起圖解面板，輸入 /flow 可再打開。' }
+    }
+    await $.ui.open({ id: PANE, title: TITLE })
+    const answer = await read($, lastAnswer)
+    if (answer === '') return { text: '目前還沒有可以整理的回應。' }
+    $.clock.after(0, () => {
+      void generate($, answer)
+    })
+
+    return { text: '正在重畫上一則回應的流程圖。' }
+  })
+
+  on('turn.complete', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId || e.reason !== 'answer' || !e.answer) return result
+    await update($, lastAnswer, () => e.answer)
+    if (await read($, isAuto)) {
+      const answer = e.answer
+      // 判斷與產生都交給計時器跑，不卡住回合結束。
+      $.clock.after(0, () => {
+        void (async () => {
+          if (await isWorthDrawing($, answer)) await generate($, answer)
+        })()
+      })
+    }
+
+    return result
+  })
+
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const { Box, Text } = $.ui.resolve(e)
+    const current = await read($, map)
+    const busy = await read($, isBusy)
+    const auto = await read($, isAuto)
+
+    if (!current) {
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>
+            {busy ? '流程圖產生中，請稍候。' : auto ? '長回應結束後會自動產生流程圖。' : '自動產生已關閉，輸入 /flow 手動產生。'}
+          </Text>
+        </Box>
+      )
+    }
+
+    if (current.diagram !== 'flowchart') {
+      return (
+        <Box flexDirection="column">
+          {busy && <Text dimColor>更新中…</Text>}
+          <Text bold>{current.summary.replace(/^摘要[:：]\s*/, '')}</Text>
+          <Text dimColor>{`${DIAGRAM_NAMES[current.diagram] ?? current.diagram}，完整圖在 cmux 瀏覽器窗格`}</Text>
+          <Text> </Text>
+          {current.outline.map((line, i) => (
+            <Text wrap="truncate-end" color={i === 0 ? TERMINAL_COLORS.start : undefined} bold={!line.startsWith(' ')}>
+              {line}
+            </Text>
+          ))}
+        </Box>
+      )
+    }
+
+    const order = current.nodes.map(node => node.id)
+    const labelOf = new Map(current.nodes.map(node => [node.id, node.label]))
+    return (
+      <Box flexDirection="column">
+        {busy && <Text dimColor>更新中…</Text>}
+        <Text bold>{current.summary.replace(/^摘要[:：]\s*/, '')}</Text>
+        <Text> </Text>
+        {current.nodes.map((node, i) => {
+          const outs = current.edges.filter(edge => edge.from === node.id)
+          const isStraight = outs.length === 1 && outs[0]?.label === '' && outs[0]?.to === order[i + 1]
+          return (
+            <Box flexDirection="column">
+              <Text wrap="truncate-end">
+                <Text color={TERMINAL_COLORS[node.kind] ?? 'claude'}>{node.kind === 'decide' ? '◆ ' : '■ '}</Text>
+                <Text bold={node.kind !== 'step'}>{node.label}</Text>
+              </Text>
+              {isStraight && <Text dimColor>│</Text>}
+              {!isStraight &&
+                outs.map(edge => (
+                  <Text wrap="truncate-end">
+                    <Text dimColor>├▶ </Text>
+                    {edge.label !== '' && <Text color={TERMINAL_COLORS.decide}>{edge.label} </Text>}
+                    <Text dimColor>{labelOf.get(edge.to) ?? edge.to}</Text>
+                  </Text>
+                ))}
+            </Box>
+          )
+        })}
+      </Box>
+    )
+  })
+}

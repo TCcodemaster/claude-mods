@@ -1,0 +1,4 @@
+# 引擎每次載入時自動產生的型別檔
+**/.claude-plugin/types/
+node_modules/
+.DS_Store

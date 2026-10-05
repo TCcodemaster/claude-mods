@@ -1,0 +1,1 @@
+{ "name": "gitgraph", "version": "0.1.0", "description": "在 Claude Code 面板顯示目前 repo 的 git 分支線圖，執行 git 指令後自動更新", "types": "./types/index.d.ts" }
