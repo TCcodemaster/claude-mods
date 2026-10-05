@@ -19,9 +19,12 @@
 
    ```json
    "env": {
-     "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/flowmap:~/.claude/mods/gitgraph"
+     "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/flowmap:~/.claude/mods/gitgraph",
+     "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
    }
    ```
+
+   第二行是強制開啟 mod 功能。mod 目前是逐步開放的早期功能，開關狀態快取在本機，偶爾會被存成關閉，導致新對話完全不載入 mod。
 
 3. 使用 VS Code 的話，安裝圖解檢視器，圖就會顯示在旁邊一欄：
 
