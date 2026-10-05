@@ -188,7 +188,7 @@ test('在 VS Code 裡裝了檢視器時寫出網頁給它顯示', async ($, on) 
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
-  expect(seen.files).toEqual(['/home/t/.claude/flowmap/vscode-42.html'])
+  expect(seen.files).toEqual(['/home/t/.claude/flowmap/vscode-42.html', '/home/t/.claude/flowmap/vscode-42.json'])
   expect(seen.argv).toEqual([])
 })
 

@@ -93,7 +93,8 @@ async function showInVSCode($: EngineInterface, source: string): Promise<boolean
 }
 
 // 裝了 vscode-viewer 擴充套件時，寫出網頁讓它在旁邊一欄顯示，不需要 Chrome。
-async function showInViewer($: EngineInterface, html: string): Promise<boolean> {
+// 網頁給第一次開啟用；之後檢視器讀 json，用 postMessage 換圖，頁面保留上一張、下一張的紀錄。
+async function showInViewer($: EngineInterface, html: string, data: { summary: string; mermaid: string; stamp: string }): Promise<boolean> {
   const home = await $.env.get('HOME')
   if (!home) return false
   const installed = await $.fs
@@ -103,6 +104,7 @@ async function showInViewer($: EngineInterface, html: string): Promise<boolean> 
   if (!installed) return false
   const pid = (await $.env.get('VSCODE_PID')) ?? 'default'
   await $.fs.write(`${home}/.claude/flowmap/vscode-${pid}.html`, html)
+  await $.fs.write(`${home}/.claude/flowmap/vscode-${pid}.json`, JSON.stringify({ type: 'flowmap', ...data }))
   return true
 }
 
@@ -148,7 +150,8 @@ async function generate($: EngineInterface): Promise<void> {
     const html = buildHtml(parsed.summary, parsed.mermaid, stamp)
     const script = renderScript(parsed.summary, parsed.mermaid, stamp)
     if (!inCmux && (await isVSCode($))) {
-      if (await showInViewer($, html)) return
+      const data = { summary: parsed.summary.replace(/^摘要[:：]\s*/, ''), mermaid: parsed.mermaid, stamp }
+      if (await showInViewer($, html, data)) return
       if (await showInVSCode($, mermaidForImage(parsed.summary, parsed.mermaid, parsed.diagram))) return
     }
     await showInCmux($, html, script)

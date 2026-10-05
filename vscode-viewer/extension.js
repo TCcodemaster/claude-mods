@@ -1,16 +1,14 @@
-// 監看 flowmap mod 寫出的頁面，有新圖時在旁邊一欄顯示，不搶走焦點。
-// mod 依 VS Code 視窗寫 vscode-<VSCODE_PID>.html，每個視窗只看自己的檔案；
-// 讀不到 VSCODE_PID 時（例如內建終端機）寫 vscode-default.html，所有視窗都會顯示。
+// 監看 flowmap mod 寫出的圖，有新圖時在旁邊一欄顯示，不搶走焦點。
+// mod 依 VS Code 視窗寫 vscode-<VSCODE_PID>.html 與 .json，每個視窗只看自己的檔案；
+// 讀不到 VSCODE_PID 時（例如內建終端機）寫 vscode-default.*，所有視窗都會顯示。
+// 第一次用 .html 開頁面；之後讀 .json 用 postMessage 換圖，頁面保留上一張、下一張的紀錄。
 const vscode = require('vscode')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
 
 const DIR = path.join(os.homedir(), '.claude', 'flowmap')
-const FILES = [
-  path.join(DIR, `vscode-${process.env.VSCODE_PID || 'default'}.html`),
-  path.join(DIR, 'vscode-default.html'),
-]
+const BASES = [`vscode-${process.env.VSCODE_PID || 'default'}`, 'vscode-default']
 
 let panel
 const seen = new Map()
@@ -23,21 +21,14 @@ function mtimeOf(file) {
   }
 }
 
-// 兩個檔案中較新的那個。
-function newest() {
-  return FILES.map(file => ({ file, mtime: mtimeOf(file) })).sort((a, b) => b.mtime - a.mtime)[0]
-}
-
-function show(reveal) {
-  const { file, mtime } = newest()
-  if (mtime === 0) return
-  let html
-  try {
-    html = fs.readFileSync(file, 'utf8')
-  } catch {
-    return
-  }
+function show(base) {
   if (!panel) {
+    let html
+    try {
+      html = fs.readFileSync(path.join(DIR, `${base}.html`), 'utf8')
+    } catch {
+      return
+    }
     panel = vscode.window.createWebviewPanel(
       'flowmap',
       '圖解',
@@ -47,13 +38,20 @@ function show(reveal) {
     panel.onDidDispose(() => {
       panel = undefined
     })
-  } else if (reveal) {
-    panel.reveal(vscode.ViewColumn.Beside, true)
+    panel.webview.html = html
+    return
   }
-  panel.webview.html = html
+  let data
+  try {
+    data = JSON.parse(fs.readFileSync(path.join(DIR, `${base}.json`), 'utf8'))
+  } catch {
+    return
+  }
+  panel.reveal(vscode.ViewColumn.Beside, true)
+  panel.webview.postMessage(data)
 }
 
-// 刪掉已經關閉的 VS Code 視窗留下的檔案，避免每次重開都多一個。
+// 刪掉已經關閉的 VS Code 視窗留下的檔案，避免每次重開都多一組。
 function cleanStale() {
   let names = []
   try {
@@ -62,7 +60,7 @@ function cleanStale() {
     return
   }
   for (const name of names) {
-    const m = /^vscode-(\d+)\.html$/.exec(name)
+    const m = /^vscode-(\d+)\.(html|json)$/.exec(name)
     if (!m || m[1] === process.env.VSCODE_PID) continue
     try {
       process.kill(Number(m[1]), 0)
@@ -77,29 +75,36 @@ function cleanStale() {
 function activate(context) {
   fs.mkdirSync(DIR, { recursive: true })
   cleanStale()
-  for (const file of FILES) seen.set(file, mtimeOf(file))
+  for (const base of BASES) seen.set(base, mtimeOf(path.join(DIR, `${base}.json`)))
   // 用輪詢而不是 fs.watch：mod 每次是整檔覆寫，輪詢在各平台都穩定。
   const timer = setInterval(() => {
-    let changed = false
-    for (const file of FILES) {
-      const mtime = mtimeOf(file)
-      if (mtime !== seen.get(file)) {
-        seen.set(file, mtime)
-        changed = mtime !== 0 || changed
+    for (const base of BASES) {
+      const mtime = mtimeOf(path.join(DIR, `${base}.json`))
+      if (mtime !== seen.get(base)) {
+        seen.set(base, mtime)
+        if (mtime !== 0) show(base)
       }
     }
-    if (changed) show(true)
   }, 1000)
   context.subscriptions.push({ dispose: () => clearInterval(timer) })
-  context.subscriptions.push(vscode.commands.registerCommand('flowmap.show', () => show(true)))
+  context.subscriptions.push(
+    vscode.commands.registerCommand('flowmap.show', () => {
+      const newest = BASES.map(base => ({ base, mtime: mtimeOf(path.join(DIR, `${base}.json`)) })).sort(
+        (a, b) => b.mtime - a.mtime,
+      )[0]
+      if (newest && newest.mtime !== 0) show(newest.base)
+    }),
+  )
 }
 
 // 視窗關閉時刪掉自己的檔案。
 function deactivate() {
   if (!process.env.VSCODE_PID) return
-  try {
-    fs.unlinkSync(FILES[0])
-  } catch {}
+  for (const ext of ['html', 'json']) {
+    try {
+      fs.unlinkSync(path.join(DIR, `vscode-${process.env.VSCODE_PID}.${ext}`))
+    } catch {}
+  }
 }
 
 module.exports = { activate, deactivate }

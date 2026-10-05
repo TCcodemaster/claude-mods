@@ -276,13 +276,15 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   pre.mermaid { margin: 0; text-align: center; }
   pre.mermaid svg { max-width: none !important; height: auto; }
   .zoom { float: right; display: inline-flex; gap: 6px; align-items: center; }
+  .zoom .gap { width: 10px; }
+  .zoom button:disabled { opacity: 0.35; cursor: default; }
   .zoom button { font: inherit; width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line);
     background: var(--card); color: var(--fg); cursor: pointer; }
   pre.raw { margin: 0; white-space: pre-wrap; font: 13px/1.6 ui-monospace, Menlo, monospace; }
 </style></head>
 <body><main>
 <p class="summary" id="summary"></p>
-<p class="stamp"><span id="stamp"></span><span class="zoom"><button id="zout" title="縮小">－</button><span id="zval">100%</span><button id="zin" title="放大">＋</button></span></p>
+<p class="stamp"><span id="stamp"></span><span class="zoom"><button id="prev" title="上一張（←）">‹</button><span id="pos">1 / 1</span><button id="next" title="下一張（→）">›</button><span class="gap"></span><button id="zout" title="縮小">－</button><span id="zval">100%</span><button id="zin" title="放大">＋</button></span></p>
 <div class="card" id="card"></div>
 <div class="legend" id="legend"></div>
 </main>
@@ -324,9 +326,19 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   const step = d => { scale = Math.min(2, Math.max(0.5, Math.round((scale + d) * 10) / 10)); applyZoom() }
   document.getElementById('zin').onclick = () => step(0.1)
   document.getElementById('zout').onclick = () => step(-0.1)
-  // 換圖：更新摘要與時間，重畫 Mermaid；外掛之後用 eval 呼叫它，不必重新載入頁面。
+  // 這個窗格看過的圖都記在 history，用上一張、下一張切換，最多保留 20 張。
+  const history = []
+  let index = -1
   let seq = 0
-  window.flowmapRender = (summary, code, stamp) => {
+  const updateNav = () => {
+    document.getElementById('pos').textContent = (index + 1) + ' / ' + history.length
+    document.getElementById('prev').disabled = index <= 0
+    document.getElementById('next').disabled = index >= history.length - 1
+  }
+  const show = i => {
+    index = i
+    updateNav()
+    const { summary, code, stamp } = history[i]
     document.getElementById('summary').textContent = summary
     document.getElementById('stamp').textContent = stamp
     const isFlow = /^(flowchart|graph)\\s/.test(code.trim())
@@ -339,13 +351,36 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
     const id = 'flowmap-' + seq
     return mermaid.parse(full)
       .then(() => mermaid.render(id, full))
-      .then(({ svg }) => { card.innerHTML = '<pre class="mermaid">' + svg + '</pre>'; applyZoom() })
+      .then(({ svg }) => {
+        // 快速切換時，晚畫完的舊圖不要蓋掉新圖。
+        if (id !== 'flowmap-' + seq) return
+        card.innerHTML = '<pre class="mermaid">' + svg + '</pre>'
+        applyZoom()
+      })
       .catch(err => {
+        if (id !== 'flowmap-' + seq) return
         card.innerHTML = '<p class="stamp">這張圖的語法有誤，改顯示原始內容。輸入 /flow 可以重畫。</p><pre class="raw"></pre>'
         card.querySelector('.raw').textContent = code
         console.error(err)
       })
   }
+  // 換圖：記進 history 並顯示最新一張；外掛用 eval 或 postMessage 呼叫，不必重新載入頁面。
+  window.flowmapRender = (summary, code, stamp) => {
+    history.push({ summary, code, stamp })
+    if (history.length > 20) history.shift()
+    return show(history.length - 1)
+  }
+  document.getElementById('prev').onclick = () => index > 0 && show(index - 1)
+  document.getElementById('next').onclick = () => index < history.length - 1 && show(index + 1)
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowLeft' && index > 0) show(index - 1)
+    if (e.key === 'ArrowRight' && index < history.length - 1) show(index + 1)
+  })
+  // VS Code 檢視器用 postMessage 送新圖。
+  window.addEventListener('message', e => {
+    const d = e.data
+    if (d && d.type === 'flowmap') window.flowmapRender(d.summary, d.mermaid, d.stamp)
+  })
   applyZoom()
   window.flowmapRender(${renderArgs(summary, mermaid, stamp)})
 </script>

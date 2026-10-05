@@ -2,7 +2,7 @@
   "name": "flowmap-viewer",
   "displayName": "Flowmap Viewer",
   "description": "在旁邊一欄顯示 flowmap mod 產生的圖解",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "publisher": "tccodemaster",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/TCcodemaster/claude-mods" },
