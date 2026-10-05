@@ -53,8 +53,30 @@ function show(reveal) {
   panel.webview.html = html
 }
 
+// 刪掉已經關閉的 VS Code 視窗留下的檔案，避免每次重開都多一個。
+function cleanStale() {
+  let names = []
+  try {
+    names = fs.readdirSync(DIR)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const m = /^vscode-(\d+)\.html$/.exec(name)
+    if (!m || m[1] === process.env.VSCODE_PID) continue
+    try {
+      process.kill(Number(m[1]), 0)
+    } catch {
+      try {
+        fs.unlinkSync(path.join(DIR, name))
+      } catch {}
+    }
+  }
+}
+
 function activate(context) {
   fs.mkdirSync(DIR, { recursive: true })
+  cleanStale()
   for (const file of FILES) seen.set(file, mtimeOf(file))
   // 用輪詢而不是 fs.watch：mod 每次是整檔覆寫，輪詢在各平台都穩定。
   const timer = setInterval(() => {
@@ -72,6 +94,12 @@ function activate(context) {
   context.subscriptions.push(vscode.commands.registerCommand('flowmap.show', () => show(true)))
 }
 
-function deactivate() {}
+// 視窗關閉時刪掉自己的檔案。
+function deactivate() {
+  if (!process.env.VSCODE_PID) return
+  try {
+    fs.unlinkSync(FILES[0])
+  } catch {}
+}
 
 module.exports = { activate, deactivate }
