@@ -176,6 +176,35 @@ export function parseSurface(stdout: string): string | null {
   return /surface=(\S+)/.exec(stdout)?.[1] ?? null
 }
 
+// 給 mermaid-cli 渲染成圖片的原始碼：摘要當標題，流程圖補上淺色配色。
+export function mermaidForImage(summary: string, mermaid: string, diagram: string): string {
+  const title = summary.replace(/^摘要[:：]\s*/, '').replace(/"/g, "'")
+  const init = {
+    theme: 'base',
+    themeVariables: {
+      fontFamily: 'PingFang TC, sans-serif',
+      fontSize: '18px',
+      lineColor: '#9aa1ab',
+      edgeLabelBackground: '#ffffff',
+    },
+  }
+  const defs = diagram === 'flowchart'
+    ? [
+        'classDef start fill:#e3efff,stroke:#2f6fde,stroke-width:2px,color:#1f2328',
+        'classDef step fill:#f3f4f6,stroke:#8b95a5,stroke-width:2px,color:#1f2328',
+        'classDef decide fill:#fff4d6,stroke:#d99a00,stroke-width:2px,color:#1f2328',
+        'classDef done fill:#e3f7ea,stroke:#1f9d55,stroke-width:2px,color:#1f2328',
+        'classDef warn fill:#ffe7e5,stroke:#d63b2f,stroke-width:2px,color:#1f2328',
+      ]
+    : []
+  return [
+    ...(title === '' ? [] : ['---', `title: "${title}"`, '---']),
+    `%%{init: ${JSON.stringify(init)}}%%`,
+    mermaid,
+    ...defs.map(line => `  ${line}`),
+  ].join('\n')
+}
+
 export function toDataUrl(html: string): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
 }

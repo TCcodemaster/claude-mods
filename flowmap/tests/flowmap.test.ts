@@ -138,3 +138,26 @@ test('不在 cmux 時改用系統瀏覽器開啟', async ($, on) => {
   expect(seen.files).toEqual(['/home/t/.claude/flowmap/latest.html'])
   expect(seen.argv).toEqual([['open', '-g', '/home/t/.claude/flowmap/latest.html']])
 })
+
+test('在 VS Code 裡渲染成 PNG 並用 VS Code 打開', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { HOME: '/home/t', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', PATH: '/usr/bin' })
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('fs.write', (_$, e) => {
+    seen.files.push(e.path)
+    return { value: undefined }
+  })
+  on('process.run', (_$, e) => {
+    seen.argv.push([...e.argv])
+    return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
+  })
+  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  expect(seen.files).toEqual(['/home/t/.claude/flowmap/latest.mmd', '/home/t/.claude/flowmap/puppeteer.json'])
+  expect(seen.argv[0]?.[0]).toBe('mmdc')
+  expect(seen.argv[1]?.slice(1)).toEqual(['-r', '/home/t/.claude/flowmap/latest.png'])
+})

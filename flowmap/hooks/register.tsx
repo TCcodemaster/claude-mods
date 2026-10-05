@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { FlowMap } from '../types'
-import { buildHtml, JUDGE, parseReply, parseSurface, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
+import { buildHtml, JUDGE, mermaidForImage, parseReply, parseSurface, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 
 const PANE = 'flowmap'
 const TITLE = '圖解'
@@ -65,6 +65,37 @@ async function showInCmux($: EngineInterface, html: string): Promise<void> {
   await update($, browser, () => surface)
 }
 
+const CODE_CLI = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
+const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+
+// 在 VS Code 裡（擴充套件或內建終端機）：用 mermaid-cli 借 Chrome 渲染成 PNG，
+// 再用 VS Code 的圖片檢視器打開。檔名固定，已開著的分頁會自動換成新圖。
+// 少了 mermaid-cli 或 Chrome 就回傳 false，改走系統瀏覽器。
+async function showInVSCode($: EngineInterface, source: string): Promise<boolean> {
+  const home = await $.env.get('HOME')
+  if (!home) return false
+  const dir = `${home}/.claude/flowmap`
+  await $.fs.write(`${dir}/latest.mmd`, source)
+  await $.fs.write(`${dir}/puppeteer.json`, JSON.stringify({ executablePath: CHROME, headless: 'new' }))
+  // VS Code 擴充套件的 PATH 可能沒有 Homebrew，mermaid-cli 需要找得到 node。
+  const path = `/opt/homebrew/bin:/usr/local/bin:${(await $.env.get('PATH')) ?? '/usr/bin:/bin'}`
+  try {
+    const drawn = await $.process.run(
+      ['mmdc', '-q', '-p', `${dir}/puppeteer.json`, '-i', `${dir}/latest.mmd`, '-o', `${dir}/latest.png`, '-s', '2', '-b', 'white'],
+      { env: { PATH: path }, timeoutMs: 60000 },
+    )
+    if (drawn.exitCode !== 0) return false
+    const opened = await $.process.run([CODE_CLI, '-r', `${dir}/latest.png`], { env: { PATH: path } })
+    return opened.exitCode === 0
+  } catch {
+    return false
+  }
+}
+
+async function isVSCode($: EngineInterface): Promise<boolean> {
+  return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-vscode' || (await $.env.get('TERM_PROGRAM')) === 'vscode'
+}
+
 // 不在 cmux 裡（例如 VS Code 擴充套件，它不畫 mod 的面板）：寫成檔案，用系統預設瀏覽器在背景打開。
 // 只在 macOS 上有 open 指令；其他系統或遠端伺服器上打不開就靜默略過。
 async function showInBrowser($: EngineInterface, html: string): Promise<void> {
@@ -102,6 +133,10 @@ async function generate($: EngineInterface, answer: string): Promise<void> {
   const next: FlowMap = { ...parsed, at }
   await update($, map, () => next)
   if (await read($, isWeb)) {
+    const inCmux = Boolean(await $.env.get('CMUX_WORKSPACE_ID'))
+    if (!inCmux && (await isVSCode($))) {
+      if (await showInVSCode($, mermaidForImage(parsed.summary, parsed.mermaid, parsed.diagram))) return
+    }
     const stamp = new Date(at).toLocaleString('zh-TW', { hour12: false })
     await showInCmux($, buildHtml(parsed.summary, parsed.mermaid, stamp))
   }
