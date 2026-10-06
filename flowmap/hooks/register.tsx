@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { FlowMap } from '../types'
-import { buildHtml, checkFlow, JUDGE, mermaidForImage, parseReply, parseSurface, renderScript, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
+import { buildHtml, checkFlow, findPane, JUDGE, mermaidForImage, parseReply, parseSurface, renderScript, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
 
 const PANE = 'flowmap'
@@ -45,16 +45,25 @@ async function isWorthDrawing($: EngineInterface, answer: string): Promise<boole
 // 頁面直接編進 data URL，不寫檔：SSH 到遠端時，本機的 cmux 瀏覽器讀不到伺服器上的檔案。
 // 只用本機版與遠端版 cmux 都認得的參數，輸出則兩種格式都接受。
 // 已經開著的窗格不用 navigate 換網址（cmux 會把 data URL 當成搜尋字詞），
-// 改用 eval 呼叫頁面內建的換圖函式。
+// 改用 browser.eval 呼叫頁面內建的換圖函式。
 async function showInCmux($: EngineInterface, html: string, script: string): Promise<void> {
   // 不在 cmux 裡就不開任何瀏覽器，圖只留在 /flow 面板。
   if (!(await $.env.get('CMUX_WORKSPACE_ID'))) return
   const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
 
+  // 記住的窗格只在這個工作階段有效；重開 Claude Code 或另開對話時，改找工作區裡已經開著的圖解分頁。
+  const swap = async (surface: string): Promise<boolean> => {
+    // 遠端版 cmux 的 browser 子指令不收窗格參數，換圖改走兩邊都支援的 rpc。
+    const swapped = await $.process.run([cmux, 'rpc', 'browser.eval', JSON.stringify({ surface_id: surface, script })])
+    return swapped.exitCode === 0 && swapped.stdout.includes('flowmap-ok')
+  }
   const current = await read($, browser)
-  if (current) {
-    const swapped = await $.process.run([cmux, 'browser', current, 'eval', script])
-    if (swapped.exitCode === 0 && swapped.stdout.includes('flowmap-ok')) return
+  if (current && (await swap(current))) return
+  const listed = await $.process.run([cmux, '--json', 'list-panels'])
+  const found = listed.exitCode === 0 ? findPane(listed.stdout) : null
+  if (found && found !== current && (await swap(found))) {
+    await update($, browser, () => found)
+    return
   }
   const opened = await $.process.run([cmux, 'browser', 'open-split', toDataUrl(html)])
   const surface = parseSurface(opened.stdout)

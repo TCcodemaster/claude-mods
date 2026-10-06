@@ -221,6 +221,17 @@ export function parseSurface(stdout: string): string | null {
   return /surface=(\S+)/.exec(stdout)?.[1] ?? null
 }
 
+// 從 `cmux --json list-panels` 找這個工作區裡已經開著的圖解分頁：優先選分頁列上正在顯示的，否則選最後開的。
+export function findPane(stdout: string): string | null {
+  try {
+    const data = JSON.parse(stdout) as { surfaces?: { type?: string; title?: string; ref?: string; selected_in_pane?: boolean }[] }
+    const panes = (data.surfaces ?? []).filter(s => s.type === 'browser' && s.title === '圖解' && typeof s.ref === 'string')
+    return (panes.find(s => s.selected_in_pane) ?? panes.at(-1))?.ref ?? null
+  } catch {
+    return null
+  }
+}
+
 // 給 mermaid-cli 渲染成圖片的原始碼：摘要當標題，流程圖補上淺色配色。
 export function mermaidForImage(summary: string, mermaid: string, diagram: string): string {
   const title = summary.replace(/^摘要[:：]\s*/, '').replace(/"/g, "'")

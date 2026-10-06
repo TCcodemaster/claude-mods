@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { checkFlow, JUDGE, parseReply, parseSurface } from '../hooks/flow'
+import { checkFlow, findPane, JUDGE, parseReply, parseSurface } from '../hooks/flow'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -28,7 +28,7 @@ function setup(on: On, seen: Seen) {
   })
   on('process.run', (_$, e) => {
     seen.argv.push([...e.argv])
-    const stdout = e.argv.includes('eval') ? 'flowmap-ok' : 'OK surface=abc-123 pane=p'
+    const stdout = e.argv.includes('browser.eval') ? '{"value":"flowmap-ok"}' : 'OK surface=abc-123 pane=p'
     return { value: { exitCode: 0, stdout, stderr: '' } as never }
   })
   on('model.complete', (_$, e) => {
@@ -57,7 +57,7 @@ test('解析 Mermaid 節點、類別與分支', () => {
   ])
 })
 
-test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 navigate', async ($, on) => {
+test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 browser.eval 換圖', async ($, on) => {
   const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
   const clock = setup(on, seen)
   await $.turn.complete(answer('步驟'.repeat(400)))
@@ -65,8 +65,9 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 n
   await clock.advance(1)
   expect(seen.prompts.length).toBe(1)
   expect(seen.files).toEqual([])
-  expect(seen.argv[0]?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
-  expect(seen.argv[0]?.[3]?.startsWith('data:text/html;charset=utf-8,')).toBe(true)
+  expect(seen.argv[0]?.slice(0, 3)).toEqual(['/bin/cmux', '--json', 'list-panels'])
+  expect(seen.argv[1]?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
+  expect(seen.argv[1]?.[3]?.startsWith('data:text/html;charset=utf-8,')).toBe(true)
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: 'flowmap', surface, component: 'Pane', requestId: 'flowmap', props: {} as never })
     const drawn = JSON.stringify(await pane.drawn())
@@ -77,9 +78,10 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 n
   await $.turn.complete(answer('流程'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
-  expect(seen.argv[1]?.slice(0, 4)).toEqual(['/bin/cmux', 'browser', 'abc-123', 'eval'])
-  expect(seen.argv[1]?.[4]).toContain('flowmapRender')
-  expect(seen.argv.length).toBe(2)
+  expect(seen.argv[2]?.slice(0, 3)).toEqual(['/bin/cmux', 'rpc', 'browser.eval'])
+  expect(JSON.parse(seen.argv[2]?.[3] ?? '{}').surface_id).toBe('abc-123')
+  expect(seen.argv[2]?.[3]).toContain('flowmapRender')
+  expect(seen.argv.length).toBe(3)
 })
 
 test('短回應與子代理回應不產生', async ($, on) => {
@@ -118,6 +120,15 @@ test('本機版與遠端版 cmux 的輸出都解析得到窗格', () => {
   expect(parseSurface('{\n  "surface_id" : "B8E3-11",\n  "pane_id" : "P1"\n}')).toBe('B8E3-11')
   expect(parseSurface('{"surface_ref": "surface:9"}')).toBe('surface:9')
   expect(parseSurface('Error: unknown command')).toBe(null)
+})
+
+test('從工作區清單找回已經開著的圖解分頁', () => {
+  const panel = (ref: string, title: string, selected = false, type = 'browser') => ({ ref, title, type, selected_in_pane: selected })
+  const list = (...surfaces: object[]) => JSON.stringify({ surfaces })
+  expect(findPane(list(panel('surface:1', 'zsh', true, 'terminal'), panel('surface:2', '圖解'), panel('surface:3', '圖解')))).toBe('surface:3')
+  expect(findPane(list(panel('surface:2', '圖解', true), panel('surface:3', '圖解')))).toBe('surface:2')
+  expect(findPane(list(panel('surface:4', 'GitHub', true)))).toBe(null)
+  expect(findPane('OK surface=abc')).toBe(null)
 })
 
 test('不在 cmux 也不在 VS Code 時不開任何瀏覽器', async ($, on) => {
@@ -199,8 +210,8 @@ test('檢查出判斷少分支、節點過多與孤立節點', () => {
   expect(problems.some(p => p.includes('准許?') && p.includes('1 條分支'))).toBe(true)
   expect(problems.some(p => p.includes('孤立'))).toBe(true)
   const many = parseReply(['摘要：多。', '```mermaid', 'flowchart LR',
-    '  ' + Array.from({ length: 12 }, (_, i) => `N${i}["步驟${i}"]:::step`).join(' --> '), '```'].join('\n'))!
-  expect(checkFlow(many).some(p => p.includes('12 個'))).toBe(true)
+    '  ' + Array.from({ length: 34 }, (_, i) => `N${i}["步驟${i}"]:::step`).join(' --> '), '```'].join('\n'))!
+  expect(checkFlow(many).some(p => p.includes('34 個'))).toBe(true)
   expect(checkFlow(parseReply(REPLY)!)).toEqual([])
 })
 
