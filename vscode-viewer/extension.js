@@ -41,6 +41,10 @@ function show(base) {
     panel.onDidDispose(() => {
       panel = undefined
     })
+    // 頁面的匯出按鈕送來檔案內容，開存檔對話框寫出去（webview 裡的下載連結不會動作）。
+    panel.webview.onDidReceiveMessage(message => {
+      if (message && message.type === 'flowmap-save') void save(message)
+    })
     panel.webview.html = html
     return
   }
@@ -52,6 +56,16 @@ function show(base) {
   }
   panel.reveal(vscode.ViewColumn.Beside, true)
   panel.webview.postMessage(data)
+}
+
+async function save({ name, text, base64 }) {
+  const target = await vscode.window.showSaveDialog({
+    defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads', name)),
+  })
+  if (!target) return
+  const data = base64 !== undefined ? Buffer.from(base64, 'base64') : Buffer.from(text, 'utf8')
+  await vscode.workspace.fs.writeFile(target, data)
+  vscode.window.setStatusBarMessage(`圖解已存到 ${target.fsPath}`, 5000)
 }
 
 async function offer(base) {
