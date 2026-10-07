@@ -4,7 +4,7 @@
 
 | mod | 功能 | 指令 |
 |---|---|---|
-| flowmap | 長回應結束後由 Haiku 判斷是否值得畫圖，值得就由主模型產生 Mermaid 圖，顯示在 cmux 瀏覽器窗格；預設不顯示，提示框上方（VS Code 擴充套件改用通知）會問要不要看，按「看圖解」才打開 | `/flow`、`/flow hide`、`/flow on\|off`、`/flow web on\|off` |
+| flowmap | 長回應結束後由 Haiku 判斷是否值得畫圖，值得就由主模型產生 Mermaid 圖，顯示在 cmux 瀏覽器窗格；預設不顯示，提示框上方（VS Code 擴充套件改用通知）會問要不要看，按「看圖解」才打開；圖解頁面可以編輯 Mermaid 語法重畫，並匯出 SVG、PNG、Mermaid 原始碼 | `/flow`、`/flow hide`、`/flow on\|off`、`/flow web on\|off` |
 | gitgraph | 仿 GitHub Desktop 的提交列表，可同時勾選多條分支比對 | `/branches`、`/branches 分支 分支`、`/branches all`、`/branches hide` |
 
 ## 安裝

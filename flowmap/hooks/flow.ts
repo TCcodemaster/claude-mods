@@ -296,25 +296,39 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
     font: 17px/1.6 -apple-system, "PingFang TC", "Noto Sans TC", sans-serif; }
   main { padding: 20px 20px 32px; }
   .summary { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
-  .stamp { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .stamp { color: var(--muted); font-size: 13px; margin: 0 0 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; overflow: auto; }
   .legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; color: var(--muted); font-size: 14px; }
   .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 3px;
     margin-right: 6px; vertical-align: -1px; background: var(--c); }
   pre.mermaid { margin: 0; text-align: center; }
   pre.mermaid svg { max-width: none !important; height: auto; }
-  .zoom { float: right; display: inline-flex; gap: 6px; align-items: center; }
+  .zoom { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .zoom .gap { width: 10px; }
   .zoom button:disabled { opacity: 0.35; cursor: default; }
   .zoom button { font: inherit; width: 26px; height: 26px; border-radius: 6px; border: 1px solid var(--line);
     background: var(--card); color: var(--fg); cursor: pointer; }
   pre.raw { margin: 0; white-space: pre-wrap; font: 13px/1.6 ui-monospace, Menlo, monospace; }
+  .zoom .wide { width: auto; padding: 0 8px; }
+  .zoom select { font: inherit; height: 26px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); padding: 0 6px; }
+  .editor { margin-top: 12px; }
+  .editor[hidden] { display: none; }
+  .editor textarea { width: 100%; box-sizing: border-box; min-height: 180px; resize: vertical; padding: 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg);
+    font: 13px/1.6 ui-monospace, Menlo, monospace; }
+  .editor .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; color: var(--muted); font-size: 13px; }
+  .editor .row button { font: inherit; height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line);
+    background: var(--card); color: var(--fg); cursor: pointer; }
+  .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; min-height: 1.2em; }
 </style></head>
 <body><main>
 <p class="summary" id="summary"></p>
-<p class="stamp"><span id="stamp"></span><span class="zoom"><button id="prev" title="上一張（←）">‹</button><span id="pos">1 / 1</span><button id="next" title="下一張（→）">›</button><span class="gap"></span><button id="zout" title="縮小">－</button><span id="zval">100%</span><button id="zin" title="放大">＋</button></span></p>
+<p class="stamp"><span id="stamp"></span><span class="zoom"><button id="prev" title="上一張（←）">‹</button><span id="pos">1 / 1</span><button id="next" title="下一張（→）">›</button><span class="gap"></span><button id="zout" title="縮小">－</button><span id="zval">100%</span><button id="zin" title="放大">＋</button><span class="gap"></span><button class="wide" id="edit" title="編輯 Mermaid 語法">編輯</button><select id="export" title="匯出"><option value="">匯出</option><option value="svg">SVG 圖檔</option><option value="png">PNG 圖檔</option><option value="mmd">Mermaid 原始碼</option><option value="copy">複製原始碼</option></select></span></p>
 <div class="card" id="card"></div>
 <div class="legend" id="legend"></div>
+<div class="editor" id="editor" hidden><textarea id="code" spellcheck="false"></textarea><div class="row"><button id="apply">套用</button><button id="revert">還原</button><span>⌘Enter 套用；套用後會存成新的一張，可用上一張回到原圖</span></div></div>
+<p class="note" id="note"></p>
 </main>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <script>
@@ -327,7 +341,7 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   const names = { start: '起點', step: '步驟', decide: '判斷', done: '結果', warn: '注意' }
   const defs = Object.entries(palette).map(([k, [fill, stroke]]) =>
     'classDef ' + k + ' fill:' + fill + ',stroke:' + stroke + ',stroke-width:2px,color:' + (dark ? '#e6e6e6' : '#1f2328'))
-  mermaid.initialize({ startOnLoad: false, theme: 'base', darkMode: dark, securityLevel: 'strict',
+  const config = { startOnLoad: false, theme: 'base', darkMode: dark, securityLevel: 'strict',
     flowchart: { curve: 'basis', htmlLabels: true, nodeSpacing: 36, rankSpacing: 48, useMaxWidth: false },
     sequence: { useMaxWidth: false }, state: { useMaxWidth: false }, timeline: { useMaxWidth: false },
     er: { useMaxWidth: false }, quadrantChart: { useMaxWidth: false }, mindmap: { useMaxWidth: false },
@@ -336,7 +350,8 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
       primaryColor: dark ? '#1d3a5c' : '#e3efff', primaryBorderColor: dark ? '#7cb7ff' : '#2f6fde',
       primaryTextColor: dark ? '#e6e6e6' : '#1f2328', secondaryColor: dark ? '#173d2a' : '#e3f7ea',
       tertiaryColor: dark ? '#4a3a12' : '#fff4d6', actorBkg: dark ? '#1d3a5c' : '#e3efff',
-      actorBorder: dark ? '#7cb7ff' : '#2f6fde', noteBkgColor: dark ? '#4a3a12' : '#fff4d6' } })
+      actorBorder: dark ? '#7cb7ff' : '#2f6fde', noteBkgColor: dark ? '#4a3a12' : '#fff4d6' } }
+  mermaid.initialize(config)
   // 縮放比例記在這個頁面的瀏覽器儲存裡，下一張圖沿用。
   let scale = 1
   try { scale = Number(localStorage.getItem('flowmap-zoom')) || 1 } catch (e) {}
@@ -369,6 +384,7 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
     const { summary, code, stamp } = history[i]
     document.getElementById('summary').textContent = summary
     document.getElementById('stamp').textContent = stamp
+    document.getElementById('code').value = code
     const isFlow = /^(flowchart|graph)\\s/.test(code.trim())
     document.getElementById('legend').innerHTML = isFlow
       ? Object.entries(palette).map(([k, [, stroke]]) => '<span style="--c:' + stroke + '">' + names[k] + '</span>').join('')
@@ -398,12 +414,133 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
     if (history.length > 20) history.shift()
     return show(history.length - 1)
   }
+  // cmux 的 browser.eval 用這個入口：參數是 [摘要, 圖, 時間] 的 JSON 再 base64。
+  window.flowmapRenderB64 = b64 => {
+    const bytes = Uint8Array.from(atob(b64), ch => ch.charCodeAt(0))
+    const [summary, code, stamp] = JSON.parse(new TextDecoder().decode(bytes))
+    return window.flowmapRender(summary, code, stamp)
+  }
   document.getElementById('prev').onclick = () => index > 0 && show(index - 1)
   document.getElementById('next').onclick = () => index < history.length - 1 && show(index + 1)
   document.addEventListener('keydown', e => {
+    if (e.target && e.target.tagName === 'TEXTAREA') return
     if (e.key === 'ArrowLeft' && index > 0) show(index - 1)
     if (e.key === 'ArrowRight' && index < history.length - 1) show(index + 1)
   })
+  // 編輯語法：套用後存成新的一張並重畫，原圖留在歷史裡。
+  const editor = document.getElementById('editor')
+  const codeBox = document.getElementById('code')
+  const note = msg => { document.getElementById('note').textContent = msg }
+  document.getElementById('edit').onclick = () => {
+    editor.hidden = !editor.hidden
+    if (!editor.hidden) codeBox.focus()
+  }
+  const apply = () => {
+    if (index < 0) return
+    const { summary, stamp } = history[index]
+    const base = stamp.replace(/（已編輯）$/, '')
+    window.flowmapRender(summary, codeBox.value, base + '（已編輯）')
+  }
+  document.getElementById('apply').onclick = apply
+  document.getElementById('revert').onclick = () => { if (index >= 0) codeBox.value = history[index].code }
+  codeBox.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); apply() }
+  })
+  // 匯出：SVG 與原始碼直接下載；PNG 先改用純 SVG 文字重畫（HTML 標籤畫進 canvas 會失敗），再轉成圖片。
+  // 在 VS Code 的 webview 裡下載連結不會動作，改用 postMessage 請擴充套件開存檔對話框。
+  const vscodeApi = window.acquireVsCodeApi ? window.acquireVsCodeApi() : null
+  const pad = n => String(n).padStart(2, '0')
+  const fileStem = () => {
+    const d = new Date()
+    return 'flowmap-' + d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds())
+  }
+  const saveHref = (name, href) => {
+    const a = document.createElement('a')
+    a.href = href
+    a.download = name
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  }
+  const download = (name, mime, text) => {
+    if (vscodeApi) { vscodeApi.postMessage({ type: 'flowmap-save', name, text }); return }
+    saveHref(name, 'data:' + mime + ';charset=utf-8,' + encodeURIComponent(text))
+  }
+  const currentSvg = () => {
+    const svg = document.querySelector('#card svg')
+    if (!svg) return null
+    const copy = svg.cloneNode(true)
+    copy.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+    copy.removeAttribute('style')
+    return copy.outerHTML
+  }
+  const renderPlain = code => {
+    const isFlow = /^(flowchart|graph)\\s/.test(code.trim())
+    const full = isFlow ? code + '\\n' + defs.join('\\n') : code
+    mermaid.initialize({ ...config, flowchart: { ...config.flowchart, htmlLabels: false } })
+    return mermaid.render('flowmap-export', full).finally(() => mermaid.initialize(config))
+  }
+  const toPng = svgText => new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const ratio = 2
+      canvas.width = Math.ceil(img.width * ratio)
+      canvas.height = Math.ceil(img.height * ratio)
+      const ctx = canvas.getContext('2d')
+      ctx.fillStyle = dark ? '#16181d' : '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+      ctx.scale(ratio, ratio)
+      ctx.drawImage(img, 0, 0)
+      try { resolve(canvas.toDataURL('image/png')) } catch (err) { reject(err) }
+    }
+    img.onerror = () => reject(new Error('svg load failed'))
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgText)
+  })
+  const copyText = text => {
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).catch(() => {}); return true }
+    const box = document.createElement('textarea')
+    box.value = text
+    document.body.appendChild(box)
+    box.select()
+    const ok = document.execCommand('copy')
+    box.remove()
+    return ok
+  }
+  document.getElementById('export').onchange = e => {
+    const kind = e.target.value
+    e.target.value = ''
+    if (index < 0) return
+    const code = history[index].code
+    note('')
+    if (kind === 'mmd') download(fileStem() + '.mmd', 'text/plain', code)
+    if (kind === 'copy') note(copyText(code) ? '已複製 Mermaid 原始碼。' : '複製失敗，請改用匯出原始碼。')
+    if (kind === 'svg') {
+      const svg = currentSvg()
+      if (svg) download(fileStem() + '.svg', 'image/svg+xml', svg)
+      else note('目前沒有畫出的圖可以匯出。')
+    }
+    if (kind === 'png') {
+      note('正在產生 PNG…')
+      renderPlain(code)
+        .then(({ svg }) => {
+          const box = document.createElement('div')
+          box.innerHTML = svg
+          const el = box.querySelector('svg')
+          el.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+          const vb = el.viewBox && el.viewBox.baseVal
+          if (vb && vb.width) { el.setAttribute('width', Math.ceil(vb.width)); el.setAttribute('height', Math.ceil(vb.height)) }
+          return toPng(el.outerHTML)
+        })
+        .then(url => {
+          const name = fileStem() + '.png'
+          if (vscodeApi) { vscodeApi.postMessage({ type: 'flowmap-save', name, base64: url.split(',')[1] }); note(''); return }
+          saveHref(name, url)
+          note('PNG 已下載到「下載項目」。')
+        })
+        .catch(err => { console.error(err); note('PNG 產生失敗，請改匯出 SVG。') })
+    }
+  }
   // VS Code 檢視器用 postMessage 送新圖。
   window.addEventListener('message', e => {
     const d = e.data
