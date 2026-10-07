@@ -1,5 +1,6 @@
-import type { On } from 'claude-code'
+import type { On, RenderElement } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import { checkFlow, findPane, JUDGE, parseReply, parseSurface } from '../hooks/flow'
 
@@ -21,6 +22,12 @@ function setup(on: On, seen: Seen) {
   mock.store(on)
   mock.env(on, { CMUX_WORKSPACE_ID: 'ws-1', HOME: '/home/t', CMUX_BUNDLED_CLI_PATH: '/bin/cmux' })
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.close', () => ({ value: undefined }))
+  // 測試裡沒有引擎自己的按鈕列，mod 讓出時畫一行替代文字。
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return h(Text, {}, '引擎預設') as RenderElement
+  })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('fs.write', (_$, e) => {
     seen.files.push(e.path)
@@ -32,14 +39,20 @@ function setup(on: On, seen: Seen) {
     return { value: { exitCode: 0, stdout, stderr: '' } as never }
   })
   on('model.complete', (_$, e) => {
-    seen.judged += 1
-    return { value: { isAnswered: true, text: e.system === JUDGE ? seen.verdict : '', usage } }
-  })
-  on('model.fork', (_$, e) => {
-    seen.prompts.push(e.prompt)
+    if (e.system === JUDGE) {
+      seen.judged += 1
+      return { value: { isAnswered: true, text: seen.verdict, usage } }
+    }
+    seen.prompts.push(String(e.prompt))
     return { value: { isAnswered: true, text: REPLY, usage } }
   })
   return clock
+}
+
+// 模擬使用者在提示框上方按「看圖解」。
+async function look($: Engine) {
+  const band = await $.ui.mount({ plugin: 'flowmap', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: false } as never })
+  await band.press({ key: 'flowmap-show' })
 }
 
 const answer = (text: string, extra = {}) => ({ answer: text, durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' as const, ...extra })
@@ -63,6 +76,7 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 b
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
+  await look($)
   expect(seen.prompts.length).toBe(1)
   expect(seen.files).toEqual([])
   expect(seen.argv[0]?.slice(0, 3)).toEqual(['/bin/cmux', '--json', 'list-panels'])
@@ -78,6 +92,7 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 b
   await $.turn.complete(answer('流程'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
+  await look($)
   expect(seen.argv[2]?.slice(0, 3)).toEqual(['/bin/cmux', 'rpc', 'browser.eval'])
   expect(JSON.parse(seen.argv[2]?.[3] ?? '{}').surface_id).toBe('abc-123')
   expect(seen.argv[2]?.[3]).toContain('flowmapRender')
@@ -145,8 +160,7 @@ test('不在 cmux 也不在 VS Code 時不開任何瀏覽器', async ($, on) => 
     seen.argv.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
   })
-  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
-  on('model.fork', () => ({ value: { isAnswered: true, text: REPLY, usage } }))
+  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
@@ -159,6 +173,7 @@ test('在 VS Code 裡沒裝檢視器時渲染成 PNG 並用 VS Code 打開', asy
   const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
   const clock = mock.clock(on)
   mock.store(on)
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
   mock.env(on, { HOME: '/home/t', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', PATH: '/usr/bin' })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('fs.write', (_$, e) => {
@@ -169,11 +184,11 @@ test('在 VS Code 裡沒裝檢視器時渲染成 PNG 並用 VS Code 打開', asy
     seen.argv.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
   })
-  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
-  on('model.fork', () => ({ value: { isAnswered: true, text: REPLY, usage } }))
+  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
+  await look($)
   expect(seen.files).toEqual(['/home/t/.claude/flowmap/latest.mmd', '/home/t/.claude/flowmap/puppeteer.json'])
   expect(seen.argv[0]?.[0]).toBe('mmdc')
   expect(seen.argv[1]?.slice(1)).toEqual(['-r', '/home/t/.claude/flowmap/latest.png'])
@@ -183,6 +198,7 @@ test('在 VS Code 裡裝了檢視器時寫出網頁給它顯示', async ($, on) 
   const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
   const clock = mock.clock(on)
   mock.store(on)
+  on('ui.open', () => ({ value: { isPlaced: true as const } }))
   mock.env(on, { HOME: '/home/t', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', VSCODE_PID: '42' })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('fs.list', () => ({ value: [{ name: 'tccodemaster.flowmap-viewer-0.1.0', type: 'dir' }] as never }))
@@ -194,12 +210,12 @@ test('在 VS Code 裡裝了檢視器時寫出網頁給它顯示', async ($, on) 
     seen.argv.push([...e.argv])
     return { value: { exitCode: 0, stdout: '', stderr: '' } as never }
   })
-  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
-  on('model.fork', () => ({ value: { isAnswered: true, text: REPLY, usage } }))
+  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
   await clock.advance(1)
-  expect(seen.files).toEqual(['/home/t/.claude/flowmap/vscode-42.html', '/home/t/.claude/flowmap/vscode-42.json'])
+  await look($)
+  expect(seen.files.slice(-2)).toEqual(['/home/t/.claude/flowmap/vscode-42.html', '/home/t/.claude/flowmap/vscode-42.json'])
   expect(seen.argv).toEqual([])
 })
 
@@ -222,9 +238,9 @@ test('第一次畫錯時帶著問題清單重畫一次', async ($, on) => {
   mock.env(on, { HOME: '/home/t' })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   const BAD = ['摘要：壞圖。', '```mermaid', 'flowchart TD', '  A["開始"]:::start --> B{"准許?"}:::decide', '  B -->|否| C["自訴"]:::step', '```'].join('\n')
-  on('model.complete', () => ({ value: { isAnswered: true, text: '是', usage } }))
-  on('model.fork', (_$, e) => {
-    seen.prompts.push(e.prompt)
+  on('model.complete', (_$, e) => {
+    if (e.system === JUDGE) return { value: { isAnswered: true, text: '是', usage } }
+    seen.prompts.push(String(e.prompt))
     return { value: { isAnswered: true, text: seen.prompts.length === 1 ? BAD : REPLY, usage } }
   })
   await $.turn.complete(answer('步驟'.repeat(400)))
@@ -234,4 +250,77 @@ test('第一次畫錯時帶著問題清單重畫一次', async ($, on) => {
   expect(seen.prompts[1]).toContain('只有 1 條分支')
   const pane = await $.ui.mount({ plugin: 'flowmap', surface: 'terminal', component: 'Pane', requestId: 'flowmap', props: {} as never })
   expect(JSON.stringify(await pane.drawn())).toContain('有快取?')
+})
+
+const BAND = { plugin: 'flowmap', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false } as never } as const
+
+test('預設不顯示，詢問要看圖解嗎；按「看圖解」才打開背景先畫好的圖', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = setup(on, seen)
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.argv).toEqual([])
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
+  await band.press({ key: 'flowmap-show' })
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.argv.at(-1)?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
+  expect(JSON.stringify(await band.drawn())).toContain('圖解已經打開在右側')
+  await band.press({ key: 'flowmap-hide' })
+  expect(seen.argv.at(-1)?.slice(0, 3)).toEqual(['/bin/cmux', 'rpc', 'surface.close'])
+  expect(JSON.parse(seen.argv.at(-1)?.[3] ?? '{}')).toEqual({ workspace_id: 'ws-1', surface_id: 'abc-123' })
+  expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
+})
+
+test('按「不用」後按鈕列消失', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = setup(on, seen)
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await band.press({ key: 'flowmap-dismiss' })
+  expect(JSON.stringify(await band.drawn())).toContain('引擎預設')
+})
+
+test('Haiku 判斷不畫時不出現詢問', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '否' }
+  const clock = setup(on, seen)
+  await $.turn.complete(answer('解說'.repeat(300)))
+  await clock.advance(1)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(JSON.stringify(await band.drawn())).toContain('引擎預設')
+})
+
+test('自動產生關閉時直接詢問，按「看圖解」才請模型畫', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = setup(on, seen)
+  await $.command.run({ command: 'flow', args: 'off' } as never)
+  await $.turn.complete(answer('解說'.repeat(300)))
+  await clock.advance(1)
+  expect(seen.judged).toBe(0)
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
+  await band.press({ key: 'flowmap-show' })
+  expect(seen.prompts.length).toBe(1)
+  expect(seen.argv.at(-1)?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
+})
+
+test('VS Code 擴充套件裡畫好後寫出 -offer 檔，交給檢視器跳通知詢問', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, { HOME: '/home/t', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', VSCODE_PID: '42' })
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('fs.list', () => ({ value: [{ name: 'tccodemaster.flowmap-viewer-0.3.0', type: 'dir' }] as never }))
+  on('fs.write', (_$, e) => {
+    seen.files.push(e.path)
+    return { value: undefined }
+  })
+  on('model.complete', (_$, e) => ({ value: { isAnswered: true, text: e.system === JUDGE ? '是' : REPLY, usage } }))
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  expect(seen.files).toEqual(['/home/t/.claude/flowmap/vscode-42-offer.html', '/home/t/.claude/flowmap/vscode-42-offer.json'])
 })

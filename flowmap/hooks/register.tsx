@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { Elements, EngineInterface, Register } from 'claude-code'
 
-import type { FlowMap } from '../types'
+import type { FlowMap, FlowView } from '../types'
 import { buildHtml, checkFlow, findPane, JUDGE, mermaidForImage, parseReply, parseSurface, renderScript, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
 
@@ -23,6 +23,8 @@ const DIAGRAM_NAMES: Record<string, string> = {
 const browser = atom({ plugin: 'flowmap', key: 'browser' } as const, null)
 // 存在對話狀態裡，mod 重新載入後 /flow 仍找得到上一則回應。
 const lastAnswer = atom({ plugin: 'flowmap', key: 'lastAnswer' } as const, '')
+// 提示框上方的按鈕依這個狀態決定要顯示「隱藏」還是「畫這則」。
+const view = atom({ plugin: 'flowmap', key: 'view' } as const, null)
 
 // 太短的回應直接略過，不必花一次 Haiku 判斷。
 const MIN_CHARS = 300
@@ -103,7 +105,7 @@ async function showInVSCode($: EngineInterface, source: string): Promise<boolean
 
 // 裝了 vscode-viewer 擴充套件時，寫出網頁讓它在旁邊一欄顯示，不需要 Chrome。
 // 網頁給第一次開啟用；之後檢視器讀 json，用 postMessage 換圖，頁面保留上一張、下一張的紀錄。
-async function showInViewer($: EngineInterface, html: string, data: { summary: string; mermaid: string; stamp: string }): Promise<boolean> {
+async function showInViewer($: EngineInterface, html: string, data: { summary: string; mermaid: string; stamp: string }, suffix = ''): Promise<boolean> {
   const home = await $.env.get('HOME')
   if (!home) return false
   const installed = await $.fs
@@ -112,8 +114,8 @@ async function showInViewer($: EngineInterface, html: string, data: { summary: s
     .catch(() => false)
   if (!installed) return false
   const pid = (await $.env.get('VSCODE_PID')) ?? 'default'
-  await $.fs.write(`${home}/.claude/flowmap/vscode-${pid}.html`, html)
-  await $.fs.write(`${home}/.claude/flowmap/vscode-${pid}.json`, JSON.stringify({ type: 'flowmap', ...data }))
+  await $.fs.write(`${home}/.claude/flowmap/vscode-${pid}${suffix}.html`, html)
+  await $.fs.write(`${home}/.claude/flowmap/vscode-${pid}${suffix}.json`, JSON.stringify({ type: 'flowmap', ...data }))
   return true
 }
 
@@ -121,19 +123,76 @@ async function isVSCode($: EngineInterface): Promise<boolean> {
   return (await $.env.get('CLAUDE_CODE_ENTRYPOINT')) === 'claude-vscode' || (await $.env.get('TERM_PROGRAM')) === 'vscode'
 }
 
-// 畫圖用這次對話的主模型：fork 接在對話後面，看得到完整上下文，前段走快取。
-const FORK_HEAD = [
-  '（這是圖解外掛送出的內部請求，不是使用者的訊息，不要使用任何工具。）',
-  '請把你上一則回應整理成一張 Mermaid 圖，依照以下規則：',
-].join('\n')
-
+// 畫圖不用 fork：fork 沿用對話的 effort，主模型想很久。改用 Opus 低 effort 只看回應原文，
+// 用 claude -p 量同一則回應（含啟動時間）：Opus 高 effort 約 19 秒，低 effort 約 8 秒。
 async function draw($: EngineInterface, extra: string): Promise<Parsed | string> {
-  const reply = await $.model.fork({ prompt: `${FORK_HEAD}\n\n${SYSTEM}${extra}` })
+  const reply = await $.model.complete({
+    model: 'opus',
+    effort: 'low',
+    system: SYSTEM,
+    prompt: `<回應>\n${(await read($, lastAnswer)).slice(0, 20000)}\n</回應>\n\n請把這則回應整理成一張 Mermaid 圖。${extra}`,
+    timeoutMs: 60000,
+  })
   if (!reply.isAnswered) return `圖解產生失敗：${reply.reason}`
   return parseReply(reply.text) ?? '圖解產生失敗：模型沒有回傳 Mermaid 圖'
 }
 
-async function generate($: EngineInterface): Promise<void> {
+// 只更新同一則回應的狀態，避免舊回應的結果蓋掉新回應。
+async function setView($: EngineInterface, turn: number, state: FlowView['state']): Promise<void> {
+  await update($, view, current => (current && current.turn !== turn ? current : { turn, state }))
+}
+
+// 把圖送到外部檢視器（cmux 瀏覽器窗格或 VS Code）；有送出去就回傳 true。
+async function display($: EngineInterface, shown: FlowMap): Promise<boolean> {
+  if (!(await read($, isWeb))) return false
+  const inCmux = Boolean(await $.env.get('CMUX_WORKSPACE_ID'))
+  const stamp = new Date(shown.at).toLocaleString('zh-TW', { hour12: false })
+  const html = buildHtml(shown.summary, shown.mermaid, stamp)
+  const script = renderScript(shown.summary, shown.mermaid, stamp)
+  if (!inCmux && (await isVSCode($))) {
+    const data = { summary: shown.summary.replace(/^摘要[:：]\s*/, ''), mermaid: shown.mermaid, stamp }
+    if (await showInViewer($, html, data)) return true
+    if (await showInVSCode($, mermaidForImage(shown.summary, shown.mermaid, shown.diagram))) return true
+    return false
+  }
+  await showInCmux($, html, script)
+  return inCmux
+}
+
+// 正在產生的回應，避免同一則重複請模型畫。
+const drawing = new Set<number>()
+
+async function reveal($: EngineInterface, shown: FlowMap): Promise<void> {
+  await setView($, shown.turn, 'shown')
+  if (!(await display($, shown))) await $.ui.open({ id: PANE, title: TITLE })
+}
+
+// 收起圖解：關掉終端機面板，cmux 裡一併關掉瀏覽器窗格，按鈕回到詢問狀態。
+async function hide($: EngineInterface, turn: number): Promise<void> {
+  await setView($, turn, 'offer')
+  await $.ui.close({ id: PANE })
+  const surface = await read($, browser)
+  if (!surface || !(await $.env.get('CMUX_WORKSPACE_ID'))) return
+  const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
+  // 遠端版 cmux 不一定有 close-surface 子指令，改走兩邊都支援的 rpc。
+  await $.process.run([cmux, 'rpc', 'surface.close', JSON.stringify({ workspace_id: await $.env.get('CMUX_WORKSPACE_ID'), surface_id: surface })])
+  await update($, browser, () => null)
+}
+
+// 看圖解：背景已經畫好就直接顯示，還沒畫好就等產生完自動顯示。
+async function show($: EngineInterface, turn: number): Promise<void> {
+  const current = await read($, map)
+  if (current?.turn === turn) {
+    await reveal($, current)
+    return
+  }
+  await setView($, turn, 'wanted')
+  await generate($, turn)
+}
+
+async function generate($: EngineInterface, turn: number): Promise<void> {
+  if (drawing.has(turn)) return
+  drawing.add(turn)
   await update($, isBusy, () => true)
   let parsed = await draw($, '')
   // 檢查出問題就把問題清單交回去重畫一次；第二次還有問題就照用。
@@ -146,32 +205,77 @@ async function generate($: EngineInterface): Promise<void> {
     if (typeof retry !== 'string') parsed = retry
   }
   await update($, isBusy, () => false)
+  drawing.delete(turn)
+  const latest = await read($, view)
+  const isWanted = latest?.turn === turn && latest.state === 'wanted'
   if (typeof parsed === 'string') {
-    $.ui.toast(parsed)
+    if (isWanted) {
+      await setView($, turn, 'offer')
+      $.ui.toast(parsed)
+    }
     return
   }
   const at = await $.clock.now()
-  const next: FlowMap = { ...parsed, at }
+  const next: FlowMap = { ...parsed, at, turn }
   await update($, map, () => next)
-  if (await read($, isWeb)) {
-    const inCmux = Boolean(await $.env.get('CMUX_WORKSPACE_ID'))
-    const stamp = new Date(at).toLocaleString('zh-TW', { hour12: false })
-    const html = buildHtml(parsed.summary, parsed.mermaid, stamp)
-    const script = renderScript(parsed.summary, parsed.mermaid, stamp)
-    if (!inCmux && (await isVSCode($))) {
-      const data = { summary: parsed.summary.replace(/^摘要[:：]\s*/, ''), mermaid: parsed.mermaid, stamp }
-      if (await showInViewer($, html, data)) return
-      if (await showInVSCode($, mermaidForImage(parsed.summary, parsed.mermaid, parsed.diagram))) return
-    }
-    await showInCmux($, html, script)
-  }
+  // 預設不顯示，只有使用者按了「看圖解」才送出去。
+  if (isWanted) await reveal($, next)
+  else await offerInVSCode($, next)
+}
+
+// VS Code 擴充套件沒有提示框上方的位置，改寫出 -offer 檔，由 flowmap-viewer 跳出原生通知詢問要不要看。
+async function offerInVSCode($: EngineInterface, drawn: FlowMap): Promise<void> {
+  if ((await $.env.get('CLAUDE_CODE_ENTRYPOINT')) !== 'claude-vscode' || !(await read($, isWeb))) return
+  const stamp = new Date(drawn.at).toLocaleString('zh-TW', { hour12: false })
+  const data = { summary: drawn.summary.replace(/^摘要[:：]\s*/, ''), mermaid: drawn.mermaid, stamp }
+  await showInViewer($, buildHtml(drawn.summary, drawn.mermaid, stamp), data, '-offer')
+}
+
+function isCardShown(current: FlowView | null): current is FlowView {
+  return current !== null && current.state !== 'judging' && current.state !== 'skipped'
+}
+
+// 圓角卡片：左邊標籤，右邊問句與按鈕。按鈕帶數字快捷鍵，提示框是空的時候直接按 1、2 就能選。
+function drawCard($: EngineInterface, ui: Pick<Elements['vscode'], 'Box' | 'Button' | 'Text'>, current: FlowView) {
+  const { Box, Button, Text } = ui
+  const turn = current.turn
+  const message = {
+    offer: '要看這則回應的圖解嗎？',
+    wanted: '圖解產生中，完成後會自動打開。',
+    shown: '圖解已經打開在右側。',
+  }[current.state as 'offer' | 'wanted' | 'shown']
+  const actions =
+    current.state === 'shown'
+      ? [{ key: 'flowmap-hide', label: '收起', run: () => hide($, turn) }]
+      : current.state === 'wanted'
+        ? [{ key: 'flowmap-cancel', label: '取消', run: () => setView($, turn, 'offer') }]
+        : [
+            { key: 'flowmap-show', label: '看圖解', run: () => show($, turn) },
+            { key: 'flowmap-dismiss', label: '不用', run: () => setView($, turn, 'skipped') },
+          ]
+  return (
+    <Box borderStyle="round" borderColor={TERMINAL_COLORS.start} paddingX={1} gap={2} alignSelf="flex-start">
+      <Text color={TERMINAL_COLORS.start} bold>
+        ◆ 圖解
+      </Text>
+      <Box flexDirection="column">
+        <Text>{message}</Text>
+        <Box gap={1}>
+          {actions.flatMap((action, i) => [
+            ...(i > 0 ? [<Text dimColor>·</Text>] : []),
+            <Button key={action.key} label={action.label} hotkey={String(i + 1)} plain onPress={action.run} />,
+          ])}
+        </Box>
+      </Box>
+    </Box>
+  )
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'flow',
-      description: '圖解：/flow 重畫上一則；/flow hide 收起；/flow on|off 自動產生；/flow web on|off 瀏覽器窗格',
+      description: '圖解：/flow 畫上一則並打開；/flow hide 收起；/flow on|off 自動產生；/flow web on|off 瀏覽器窗格',
     })
     return next(e)
   })
@@ -192,8 +296,9 @@ export const register: Register = on => {
     }
     await $.ui.open({ id: PANE, title: TITLE })
     if ((await read($, lastAnswer)) === '') return { text: '目前還沒有可以整理的回應。' }
+    const turn = (await read($, view))?.turn ?? (await $.clock.now())
     $.clock.after(0, () => {
-      void generate($)
+      void show($, turn)
     })
 
     return { text: '正在重畫上一則回應的流程圖。' }
@@ -203,17 +308,40 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.agentId || e.reason !== 'answer' || !e.answer) return result
     await update($, lastAnswer, () => e.answer)
-    if (await read($, isAuto)) {
-      const answer = e.answer
-      // 判斷與產生都交給計時器跑，不卡住回合結束。
-      $.clock.after(0, () => {
-        void (async () => {
-          if (await isWorthDrawing($, answer)) await generate($)
-        })()
-      })
+    const turn = await $.clock.now()
+    // 太短的回應不出現按鈕，要畫還是可以輸入 /flow。
+    if (e.answer.length < MIN_CHARS) {
+      await update($, view, () => null)
+      return result
     }
+    // 自動模式先由 Haiku 判斷，值得畫才詢問並在背景先畫好；關閉時每則長回應都直接詢問。
+    if (!(await read($, isAuto))) {
+      await update($, view, () => ({ turn, state: 'offer' as const }))
+      return result
+    }
+    await update($, view, () => ({ turn, state: 'judging' as const }))
+    const answer = e.answer
+    // 判斷與產生都交給計時器跑，不卡住回合結束。
+    $.clock.after(0, () => {
+      void (async () => {
+        if (!(await isWorthDrawing($, answer))) {
+          await update($, view, (current): FlowView | null => (current?.turn === turn && current.state === 'judging' ? { turn, state: 'skipped' } : current))
+          return
+        }
+        await update($, view, (current): FlowView | null => (current?.turn === turn && current.state === 'judging' ? { turn, state: 'offer' } : current))
+        await generate($, turn)
+      })()
+    })
 
     return result
+  })
+
+  // 終端機（含 SSH 與 VS Code 內建終端機）與桌機版畫在提示框上方。
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    const current = await read($, view)
+    // 新的回合在跑時先收起，等回應結束再換成新的一則。
+    if (e.props.hasSurvey || e.props.isWorking || !isCardShown(current)) return next(e)
+    return drawCard($, $.ui.resolve(e), current)
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
