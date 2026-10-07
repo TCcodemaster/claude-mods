@@ -2,14 +2,37 @@
   "name": "flowmap-viewer",
   "displayName": "Flowmap Viewer",
   "description": "在旁邊一欄顯示 flowmap mod 產生的圖解",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "tccodemaster",
   "license": "MIT",
-  "repository": { "type": "git", "url": "https://github.com/TCcodemaster/claude-mods" },
-  "engines": { "vscode": "^1.80.0" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TCcodemaster/claude-mods"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
   "main": "./extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
-    "commands": [{ "command": "flowmap.show", "title": "Flowmap: 顯示最新圖解" }]
+    "commands": [
+      {
+        "command": "flowmap.show",
+        "title": "Flowmap: 顯示最新圖解"
+      },
+      {
+        "command": "flowmap.accept",
+        "title": "Flowmap: 看這則回應的圖解"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "flowmap.accept",
+        "key": "ctrl+alt+g",
+        "mac": "ctrl+alt+g"
+      }
+    ]
   }
 }

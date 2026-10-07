@@ -2,6 +2,7 @@
 // mod 依 VS Code 視窗寫 vscode-<VSCODE_PID>.html 與 .json，每個視窗只看自己的檔案；
 // 讀不到 VSCODE_PID 時（例如內建終端機）寫 vscode-default.*，所有視窗都會顯示。
 // 第一次用 .html 開頁面；之後讀 .json 用 postMessage 換圖，頁面保留上一張、下一張的紀錄。
+// 圖解預設不顯示：mod 畫好後寫 -offer 檔，這裡跳通知問要不要看，按「看圖解」或 ctrl+alt+g 才打開。
 const vscode = require('vscode')
 const fs = require('fs')
 const os = require('os')
@@ -12,6 +13,8 @@ const BASES = [`vscode-${process.env.VSCODE_PID || 'default'}`, 'vscode-default'
 
 let panel
 const seen = new Map()
+// 最新一則還沒回覆的詢問，給快捷鍵使用。
+let pending
 
 function mtimeOf(file) {
   try {
@@ -51,6 +54,15 @@ function show(base) {
   panel.webview.postMessage(data)
 }
 
+async function offer(base) {
+  pending = base
+  const choice = await vscode.window.showInformationMessage('◆ 圖解：要看這則回應的圖解嗎？', '看圖解', '不用')
+  // 通知還沒按之前又來了新的一則，舊通知的選擇就不算數。
+  if (pending !== base) return
+  pending = undefined
+  if (choice === '看圖解') show(`${base}-offer`)
+}
+
 // 刪掉已經關閉的 VS Code 視窗留下的檔案，避免每次重開都多一組。
 function cleanStale() {
   let names = []
@@ -60,7 +72,7 @@ function cleanStale() {
     return
   }
   for (const name of names) {
-    const m = /^vscode-(\d+)\.(html|json)$/.exec(name)
+    const m = /^vscode-(\d+)(-offer)?\.(html|json)$/.exec(name)
     if (!m || m[1] === process.env.VSCODE_PID) continue
     try {
       process.kill(Number(m[1]), 0)
@@ -75,7 +87,10 @@ function cleanStale() {
 function activate(context) {
   fs.mkdirSync(DIR, { recursive: true })
   cleanStale()
-  for (const base of BASES) seen.set(base, mtimeOf(path.join(DIR, `${base}.json`)))
+  for (const base of BASES) {
+    seen.set(base, mtimeOf(path.join(DIR, `${base}.json`)))
+    seen.set(`${base}-offer`, mtimeOf(path.join(DIR, `${base}-offer.json`)))
+  }
   // 用輪詢而不是 fs.watch：mod 每次是整檔覆寫，輪詢在各平台都穩定。
   const timer = setInterval(() => {
     for (const base of BASES) {
@@ -83,6 +98,11 @@ function activate(context) {
       if (mtime !== seen.get(base)) {
         seen.set(base, mtime)
         if (mtime !== 0) show(base)
+      }
+      const offered = mtimeOf(path.join(DIR, `${base}-offer.json`))
+      if (offered !== seen.get(`${base}-offer`)) {
+        seen.set(`${base}-offer`, offered)
+        if (offered !== 0) void offer(base)
       }
     }
   }, 1000)
@@ -94,16 +114,24 @@ function activate(context) {
       )[0]
       if (newest && newest.mtime !== 0) show(newest.base)
     }),
+    vscode.commands.registerCommand('flowmap.accept', () => {
+      if (!pending) return
+      const base = pending
+      pending = undefined
+      show(`${base}-offer`)
+    }),
   )
 }
 
 // 視窗關閉時刪掉自己的檔案。
 function deactivate() {
   if (!process.env.VSCODE_PID) return
-  for (const ext of ['html', 'json']) {
-    try {
-      fs.unlinkSync(path.join(DIR, `vscode-${process.env.VSCODE_PID}.${ext}`))
-    } catch {}
+  for (const name of ['', '-offer']) {
+    for (const ext of ['html', 'json']) {
+      try {
+        fs.unlinkSync(path.join(DIR, `vscode-${process.env.VSCODE_PID}${name}.${ext}`))
+      } catch {}
+    }
   }
 }
 
