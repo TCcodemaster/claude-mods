@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { FlowMap, FlowView } from '../types'
-import { buildHtml, checkFlow, findPane, JUDGE, mermaidForImage, parseReply, parseSurface, renderScript, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
+import { BOOT_HTML, BOOT_READY, bootScripts, buildHtml, checkFlow, CMUX_LIMIT, findPane, JUDGE, mermaidForImage, parseReply, parseSurface, renderScripts, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
 
 const PANE = 'flowmap'
@@ -48,16 +48,23 @@ async function isWorthDrawing($: EngineInterface, answer: string): Promise<boole
 // 只用本機版與遠端版 cmux 都認得的參數，輸出則兩種格式都接受。
 // 已經開著的窗格不用 navigate 換網址（cmux 會把 data URL 當成搜尋字詞），
 // 改用 browser.eval 呼叫頁面內建的換圖函式。
-async function showInCmux($: EngineInterface, html: string, script: string): Promise<void> {
+// 遠端版 cmux 單次請求有上限（見 CMUX_LIMIT）：整頁塞得下就一次開，塞不下就先開啟動頁再把整頁分段送進去。
+async function showInCmux($: EngineInterface, html: string, scripts: string[]): Promise<void> {
   // 不在 cmux 裡就不開任何瀏覽器，圖只留在 /flow 面板。
   if (!(await $.env.get('CMUX_WORKSPACE_ID'))) return
   const cmux = (await $.env.get('CMUX_BUNDLED_CLI_PATH')) ?? 'cmux'
+  const evaluate = (surface: string, script: string) =>
+    $.process.run([cmux, 'rpc', 'browser.eval', JSON.stringify({ surface_id: surface, script })])
 
   // 記住的窗格只在這個工作階段有效；重開 Claude Code 或另開對話時，改找工作區裡已經開著的圖解分頁。
   const swap = async (surface: string): Promise<boolean> => {
     // 遠端版 cmux 的 browser 子指令不收窗格參數，換圖改走兩邊都支援的 rpc。
-    const swapped = await $.process.run([cmux, 'rpc', 'browser.eval', JSON.stringify({ surface_id: surface, script })])
-    return swapped.exitCode === 0 && swapped.stdout.includes('flowmap-ok')
+    for (const script of scripts) {
+      const ran = await evaluate(surface, script)
+      if (ran.exitCode !== 0) return false
+      if (script === scripts.at(-1) && !ran.stdout.includes('flowmap-ok')) return false
+    }
+    return true
   }
   const current = await read($, browser)
   if (current && (await swap(current))) return
@@ -67,13 +74,33 @@ async function showInCmux($: EngineInterface, html: string, script: string): Pro
     await update($, browser, () => found)
     return
   }
-  const opened = await $.process.run([cmux, 'browser', 'open-split', toDataUrl(html)])
+  const url = toDataUrl(html)
+  const fits = url.length <= CMUX_LIMIT
+  const opened = await $.process.run([cmux, 'browser', 'open-split', fits ? url : toDataUrl(BOOT_HTML)])
   const surface = parseSurface(opened.stdout)
   if (opened.exitCode !== 0 || !surface) {
     $.ui.toast(`圖解：無法開啟 cmux 瀏覽器窗格（${(opened.stderr || opened.stdout).trim() || opened.exitCode}）`)
     return
   }
   await update($, browser, () => surface)
+  if (fits) return
+  // 啟動頁要先載入完才認得接收函式；最多等 5 秒。
+  for (let tries = 0; tries < 20; tries += 1) {
+    const probe = await evaluate(surface, BOOT_READY)
+    if (probe.exitCode === 0 && probe.stdout.includes('function')) {
+      const pages = bootScripts(html)
+      for (const script of pages) {
+        const ran = await evaluate(surface, script)
+        if (ran.exitCode !== 0 || (script === pages.at(-1) && !ran.stdout.includes('flowmap-ok'))) {
+          $.ui.toast('圖解：頁面開了但送圖失敗，輸入 /flow 再試一次')
+          return
+        }
+      }
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, 250))
+  }
+  $.ui.toast('圖解：頁面載入逾時，輸入 /flow 再試一次')
 }
 
 const CODE_CLI = '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code'
@@ -148,14 +175,13 @@ async function display($: EngineInterface, shown: FlowMap): Promise<boolean> {
   const inCmux = Boolean(await $.env.get('CMUX_WORKSPACE_ID'))
   const stamp = new Date(shown.at).toLocaleString('zh-TW', { hour12: false })
   const html = buildHtml(shown.summary, shown.mermaid, stamp)
-  const script = renderScript(shown.summary, shown.mermaid, stamp)
   if (!inCmux && (await isVSCode($))) {
     const data = { summary: shown.summary.replace(/^摘要[:：]\s*/, ''), mermaid: shown.mermaid, stamp }
     if (await showInViewer($, html, data)) return true
     if (await showInVSCode($, mermaidForImage(shown.summary, shown.mermaid, shown.diagram))) return true
     return false
   }
-  await showInCmux($, html, script)
+  await showInCmux($, html, renderScripts(shown.summary, shown.mermaid, stamp))
   return inCmux
 }
 

@@ -2,7 +2,7 @@ import type { On, RenderElement } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { checkFlow, findPane, JUDGE, parseReply, parseSurface } from '../hooks/flow'
+import { BOOT_HTML, checkFlow, CMUX_LIMIT, findPane, JUDGE, parseReply, parseSurface, renderScripts, toDataUrl } from '../hooks/flow'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -17,7 +17,8 @@ const REPLY = [
 
 type Seen = { prompts: string[]; argv: string[][]; files: string[]; judged: number; verdict: string }
 
-function setup(on: On, seen: Seen) {
+// reply 換掉模型畫的圖；run 換掉 cmux 指令的回應（給分段送圖的情境）。
+function setup(on: On, seen: Seen, reply = REPLY, run?: (argv: string[]) => string) {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, { CMUX_WORKSPACE_ID: 'ws-1', HOME: '/home/t', CMUX_BUNDLED_CLI_PATH: '/bin/cmux' })
@@ -35,7 +36,7 @@ function setup(on: On, seen: Seen) {
   })
   on('process.run', (_$, e) => {
     seen.argv.push([...e.argv])
-    const stdout = e.argv.includes('browser.eval') ? '{"value":"flowmap-ok"}' : 'OK surface=abc-123 pane=p'
+    const stdout = run ? run([...e.argv]) : e.argv.includes('browser.eval') ? (e.argv[3]?.includes('typeof') ? '{"value":"function"}' : '{"value":"flowmap-ok"}') : 'OK surface=abc-123 pane=p'
     return { value: { exitCode: 0, stdout, stderr: '' } as never }
   })
   on('model.complete', (_$, e) => {
@@ -44,7 +45,7 @@ function setup(on: On, seen: Seen) {
       return { value: { isAnswered: true, text: seen.verdict, usage } }
     }
     seen.prompts.push(String(e.prompt))
-    return { value: { isAnswered: true, text: REPLY, usage } }
+    return { value: { isAnswered: true, text: reply, usage } }
   })
   return clock
 }
@@ -81,7 +82,12 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 b
   expect(seen.files).toEqual([])
   expect(seen.argv[0]?.slice(0, 3)).toEqual(['/bin/cmux', '--json', 'list-panels'])
   expect(seen.argv[1]?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
-  expect(seen.argv[1]?.[3]?.startsWith('data:text/html;charset=utf-8,')).toBe(true)
+  expect(seen.argv[1]?.[3]).toBe(toDataUrl(BOOT_HTML))
+  expect(seen.argv[1]?.[3]?.length).toBeLessThanOrEqual(CMUX_LIMIT)
+  const scripts = seen.argv.slice(2).map(argv => (JSON.parse(argv[3] ?? '{}') as { script: string }).script)
+  expect(scripts[0]).toBe('typeof window.flowmapBoot')
+  expect(scripts.at(-1)).toContain('window.flowmapBoot(window.flowmapBuf)')
+  const opened = seen.argv.length
   for (const surface of ['terminal', 'desktop'] as const) {
     const pane = await $.ui.mount({ plugin: 'flowmap', surface, component: 'Pane', requestId: 'flowmap', props: {} as never })
     const drawn = JSON.stringify(await pane.drawn())
@@ -93,10 +99,10 @@ test('長回應產生彩色面板並開 cmux 瀏覽器窗格，第二次改用 b
   await clock.advance(1)
   await clock.advance(1)
   await look($)
-  expect(seen.argv[2]?.slice(0, 3)).toEqual(['/bin/cmux', 'rpc', 'browser.eval'])
-  expect(JSON.parse(seen.argv[2]?.[3] ?? '{}').surface_id).toBe('abc-123')
-  expect(seen.argv[2]?.[3]).toContain('flowmapRender')
-  expect(seen.argv.length).toBe(3)
+  expect(seen.argv[opened]?.slice(0, 3)).toEqual(['/bin/cmux', 'rpc', 'browser.eval'])
+  expect(JSON.parse(seen.argv[opened]?.[3] ?? '{}').surface_id).toBe('abc-123')
+  expect(seen.argv[opened]?.[3]).toContain('flowmapRenderB64')
+  expect(seen.argv.length).toBe(opened + 1)
 })
 
 test('短回應與子代理回應不產生', async ($, on) => {
@@ -128,6 +134,36 @@ test('Haiku 判斷不需要圖時不產生', async ($, on) => {
   await clock.advance(1)
   expect(seen.judged).toBe(1)
   expect(seen.prompts.length).toBe(0)
+})
+
+test('完整頁面塞不進 cmux 單次請求時，先開啟動頁再把整頁分段送入', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const big = ['```mermaid', 'flowchart TD', ...Array.from({ length: 300 }, (_, i) => `  N${i}["步驟${i}，確認資料後送出"] --> N${i + 1}`), '```'].join('\n')
+  const clock = setup(on, seen, `摘要：很長的流程。\n${big}`)
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  await look($)
+  const evals = seen.argv.filter(argv => argv[1] === 'rpc').map(argv => (JSON.parse(argv[3] ?? '{}') as { script: string }).script)
+  expect(evals[0]).toBe('typeof window.flowmapBoot')
+  expect(evals.length).toBeGreaterThan(4)
+  expect(evals[1]?.startsWith('(window.flowmapBuf = "')).toBe(true)
+  expect(evals.at(-1)).toContain('window.flowmapBoot(window.flowmapBuf)')
+  for (const argv of seen.argv) expect((argv[3] ?? '').length).toBeLessThanOrEqual(CMUX_LIMIT + 200)
+})
+
+test('renderScripts 小圖一段送，大圖拆段累積後才畫', () => {
+  const small = renderScripts('摘要：小', 'flowchart TD\n  A --> B', '00:00')
+  expect(small.length).toBe(1)
+  expect(small[0]).toContain("'flowmap-ok'")
+  const chunked = renderScripts('摘要：大', 'x'.repeat(100), '00:00', 40)
+  expect(chunked.length).toBeGreaterThan(2)
+  expect(chunked[0]?.startsWith('(window.flowmapBuf = "')).toBe(true)
+  expect(chunked[1]?.startsWith('(window.flowmapBuf = window.flowmapBuf + "')).toBe(true)
+  expect(chunked.at(-1)).toContain('window.flowmapRenderB64(window.flowmapBuf)')
+  const joined = chunked.slice(0, -1).map(line => /"([^"]*)"/.exec(line)?.[1] ?? '').join('')
+  const decoded = new TextDecoder().decode(Uint8Array.from(atob(joined), ch => ch.charCodeAt(0)))
+  expect(JSON.parse(decoded)).toEqual(['大', 'x'.repeat(100), '00:00'])
 })
 
 test('本機版與遠端版 cmux 的輸出都解析得到窗格', () => {
@@ -266,7 +302,7 @@ test('預設不顯示，詢問要看圖解嗎；按「看圖解」才打開背�
   expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
   await band.press({ key: 'flowmap-show' })
   expect(seen.prompts.length).toBe(1)
-  expect(seen.argv.at(-1)?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
+  expect(seen.argv.some(argv => argv[1] === 'browser' && argv[2] === 'open-split')).toBe(true)
   expect(JSON.stringify(await band.drawn())).toContain('圖解已經打開在右側')
   await band.press({ key: 'flowmap-hide' })
   expect(seen.argv.at(-1)?.slice(0, 3)).toEqual(['/bin/cmux', 'rpc', 'surface.close'])
@@ -304,7 +340,7 @@ test('自動產生關閉時直接詢問，按「看圖解」才請模型畫', as
   expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
   await band.press({ key: 'flowmap-show' })
   expect(seen.prompts.length).toBe(1)
-  expect(seen.argv.at(-1)?.slice(0, 3)).toEqual(['/bin/cmux', 'browser', 'open-split'])
+  expect(seen.argv.some(argv => argv[1] === 'browser' && argv[2] === 'open-split')).toBe(true)
 })
 
 test('VS Code 擴充套件裡畫好後寫出 -offer 檔，交給檢視器跳通知詢問', async ($, on) => {

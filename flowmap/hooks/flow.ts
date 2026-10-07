@@ -261,8 +261,20 @@ export function mermaidForImage(summary: string, mermaid: string, diagram: strin
   ].join('\n')
 }
 
+// 遠端版 cmux（SSH 工作區）單次請求超過約 16 KB 就回 server returned error response，
+// data URL 與 browser.eval 的腳本都受限；這個值留了餘裕給 JSON 包裝。
+export const CMUX_LIMIT = 12000
+
+// 中文與空白用 percent 編碼會膨脹三倍，base64 只有 4/3，頁面能小很多。
+export function toBase64(text: string): string {
+  const bytes = new TextEncoder().encode(text)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
+  return btoa(binary)
+}
+
 export function toDataUrl(html: string): string {
-  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`
+  return `data:text/html;charset=utf-8;base64,${toBase64(html)}`
 }
 
 export function escapeHtml(text: string): string {
@@ -277,9 +289,36 @@ export function renderArgs(summary: string, mermaid: string, stamp: string): str
     .join(', ')
 }
 
-// 在已經開著的圖解頁面上換圖的 JavaScript；回傳 ok 代表頁面認得換圖函式。
-export function renderScript(summary: string, mermaid: string, stamp: string): string {
-  return `window.flowmapRender ? (window.flowmapRender(${renderArgs(summary, mermaid, stamp)}), 'flowmap-ok') : 'flowmap-missing'`
+// 把 base64 內容交給頁面裡的函式，拆成幾段依序用 browser.eval 執行：
+// 塞得進單次上限就直接呼叫；塞不進就先累積在頁面裡，最後一段才呼叫。累積段只回短字串，不把整個緩衝傳回來。
+export function chunkScripts(payload: string, call: (arg: string) => string, limit = CMUX_LIMIT): string[] {
+  if (payload.length <= limit) return [call(`"${payload}"`)]
+  const chunks: string[] = []
+  for (let i = 0; i < payload.length; i += limit) chunks.push(payload.slice(i, i + limit))
+  return [
+    ...chunks.map((chunk, i) => `(window.flowmapBuf = ${i === 0 ? '' : 'window.flowmapBuf + '}"${chunk}", 'flowmap-buf')`),
+    call('window.flowmapBuf'),
+  ]
+}
+
+// 在已經開著的圖解頁面上換圖；最後一段回 ok 代表頁面認得換圖函式。
+export function renderScripts(summary: string, mermaid: string, stamp: string, limit = CMUX_LIMIT): string[] {
+  const payload = toBase64(JSON.stringify([summary.replace(/^摘要[:：]\s*/, ''), mermaid, stamp]))
+  return chunkScripts(payload, arg => `window.flowmapRenderB64 ? (window.flowmapRenderB64(${arg}), 'flowmap-ok') : 'flowmap-missing'`, limit)
+}
+
+// 完整頁面塞不進 data URL 時先開這個啟動頁，再把整頁分段送進去，用 document.write 換成真正的頁面。
+export const BOOT_HTML = `<!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>圖解</title></head><body><script>
+window.flowmapBoot = b64 => {
+  const html = new TextDecoder().decode(Uint8Array.from(atob(b64), ch => ch.charCodeAt(0)))
+  document.open(); document.write(html); document.close()
+  return 'flowmap-ok'
+}
+</script></body></html>`
+export const BOOT_READY = 'typeof window.flowmapBoot'
+
+export function bootScripts(html: string, limit = CMUX_LIMIT): string[] {
+  return chunkScripts(toBase64(html), arg => `window.flowmapBoot ? window.flowmapBoot(${arg}) : 'flowmap-missing'`, limit)
 }
 
 export function buildHtml(summary: string, mermaid: string, stamp: string): string {
