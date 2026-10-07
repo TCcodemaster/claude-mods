@@ -359,6 +359,9 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   .editor .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; color: var(--muted); font-size: 13px; }
   .editor .row button { font: inherit; height: 26px; padding: 0 10px; border-radius: 6px; border: 1px solid var(--line);
     background: var(--card); color: var(--fg); cursor: pointer; }
+  .zoom button:not(:disabled):hover, .editor .row button:hover { border-color: var(--fg); }
+  .zoom button:active, .editor .row button:active { opacity: 0.6; }
+  body.editing .card, body.editing .legend { display: none; }
   .note { color: var(--muted); font-size: 13px; margin: 8px 0 0; min-height: 1.2em; }
 </style></head>
 <body><main>
@@ -470,18 +473,28 @@ export function buildHtml(summary: string, mermaid: string, stamp: string): stri
   const editor = document.getElementById('editor')
   const codeBox = document.getElementById('code')
   const note = msg => { document.getElementById('note').textContent = msg }
-  document.getElementById('edit').onclick = () => {
-    editor.hidden = !editor.hidden
-    if (!editor.hidden) codeBox.focus()
+  // 編輯時把圖收起，只留編輯區；套用後展開新圖、收起編輯區，看到新圖就是結果。
+  const setEditing = on => {
+    editor.hidden = !on
+    document.body.classList.toggle('editing', on)
+    document.getElementById('edit').textContent = on ? '看圖' : '編輯'
+    if (on) codeBox.focus()
   }
+  document.getElementById('edit').onclick = () => setEditing(editor.hidden)
   const apply = () => {
     if (index < 0) return
-    const { summary, stamp } = history[index]
+    const { summary, code, stamp } = history[index]
+    if (codeBox.value.trim() === code.trim()) { note('語法沒有變更。'); return }
     const base = stamp.replace(/（已編輯）$/, '')
-    window.flowmapRender(summary, codeBox.value, base + '（已編輯）')
+    note('')
+    window.flowmapRender(summary, codeBox.value, base + '（已編輯）').then(() => setEditing(false))
   }
   document.getElementById('apply').onclick = apply
-  document.getElementById('revert').onclick = () => { if (index >= 0) codeBox.value = history[index].code }
+  document.getElementById('revert').onclick = () => {
+    if (index < 0) return
+    codeBox.value = history[index].code
+    note('已還原成目前這張的語法。')
+  }
   codeBox.addEventListener('keydown', e => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); apply() }
   })
