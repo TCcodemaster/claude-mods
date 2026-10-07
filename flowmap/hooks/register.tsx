@@ -271,8 +271,23 @@ function drawCard($: EngineInterface, ui: Pick<Elements['vscode'], 'Box' | 'Butt
   )
 }
 
+// 每次開對話時把 mods repo 拉到最新，push 之後各台機器下次開對話就會更新。
+// 只做快轉合併，本機有未推送的提交或衝突就跳過，不動任何檔案。資料夾受監看，拉下來的改動會自動重新載入。
+async function pullLatest($: EngineInterface): Promise<void> {
+  const git = (args: string[]) => $.process.run(['git', '-C', $.plugin.root, ...args], { env: { GIT_TERMINAL_PROMPT: '0' }, timeoutMs: 30000 }).catch(() => null)
+  const before = await git(['rev-parse', 'HEAD'])
+  if (!before || before.exitCode !== 0) return
+  const pulled = await git(['pull', '--ff-only', '--quiet'])
+  if (!pulled || pulled.exitCode !== 0) return
+  const after = await git(['rev-parse', 'HEAD'])
+  if (after && after.stdout.trim() !== before.stdout.trim()) $.ui.toast('claude-mods 已更新到最新版。')
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    $.clock.after(0, () => {
+      void pullLatest($)
+    })
     await $.command.register({
       name: 'flow',
       description: '圖解：/flow 畫上一則並打開；/flow hide 收起；/flow on|off 自動產生；/flow web on|off 瀏覽器窗格',

@@ -324,3 +324,27 @@ test('VS Code 擴充套件裡畫好後寫出 -offer 檔，交給檢視器跳通�
   await clock.advance(1)
   expect(seen.files).toEqual(['/home/t/.claude/flowmap/vscode-42-offer.html', '/home/t/.claude/flowmap/vscode-42-offer.json'])
 })
+
+test('開對話時快轉拉取 mods repo，有更新才提示', async ($, on) => {
+  const argv: string[][] = []
+  const clock = mock.clock(on)
+  mock.store(on)
+  mock.env(on, {})
+  on('command.register', () => ({ value: undefined }) as never)
+  on('session.start', () => ({ cwd: '/home/t' }))
+  let head = 'aaa'
+  on('process.run', (_$, e) => {
+    argv.push([...e.argv])
+    if (e.argv.includes('pull')) head = 'bbb'
+    return { value: { exitCode: 0, stdout: e.argv.includes('rev-parse') ? `${head}\n` : '', stderr: '' } as never }
+  })
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(String((e as { text?: string }).text ?? e))
+    return { value: undefined } as never
+  })
+  await $.session.start({ source: 'startup', cwd: '/home/t' } as never)
+  await clock.advance(1)
+  expect(argv.map(a => a.slice(3).join(' '))).toEqual(['rev-parse HEAD', 'pull --ff-only --quiet', 'rev-parse HEAD'])
+  expect(toasts.length).toBe(1)
+})
