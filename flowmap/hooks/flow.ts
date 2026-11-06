@@ -187,6 +187,64 @@ export function depthOf(nodes: FlowNode[], edges: FlowEdge[]): number {
   return Math.max(0, ...level.values())
 }
 
+// 面板上的一行：縮排層數、分支標籤，以及這一行畫的節點；node 為 null 代表「接到」已畫過或稍後會畫的節點。
+export type FlowLine = { indent: number; branch: string; node: FlowNode | null; jump: string }
+
+// 把流程圖攤成縮排大綱：每個節點只出現一次，分支縮排在判斷底下，
+// 分支在同一個節點匯流時，各分支標「接到」，匯流點回到外層接著畫。
+export function outlineFlow(nodes: FlowNode[], edges: FlowEdge[]): FlowLine[] {
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  const inDegree = new Map<string, number>()
+  for (const edge of edges) inDegree.set(edge.to, (inDegree.get(edge.to) ?? 0) + 1)
+  const seen = new Set<string>()
+  const lines: FlowLine[] = []
+  const jump = (indent: number, branch: string, id: string) =>
+    lines.push({ indent, branch, node: null, jump: byId.get(id)?.label ?? id })
+
+  // 沿主線往下畫；在分支裡碰到匯流點就停，把匯流點交回上一層。
+  const walk = (start: string, indent: number, branch: string): string | null => {
+    let id: string | undefined = start
+    let label = branch
+    // 剛從分支匯流回來的節點就畫在這一層，不再往外交。
+    let isResumed = false
+    while (id !== undefined) {
+      const node = byId.get(id)
+      if (!node) return null
+      if (seen.has(id)) {
+        jump(indent, label, id)
+        return null
+      }
+      if (indent > 0 && !isResumed && (inDegree.get(id) ?? 0) > 1) {
+        jump(indent, label, id)
+        return id
+      }
+      seen.add(id)
+      lines.push({ indent, branch: label, node, jump: '' })
+      label = ''
+      isResumed = false
+      const outs = edges.filter(edge => edge.from === id)
+      const only = outs[0]
+      if (outs.length === 1 && only && only.label === '') {
+        id = only.to
+        continue
+      }
+      const merges = new Set(outs.map(edge => walk(edge.to, indent + 1, edge.label)).filter(m => m !== null))
+      // 所有分支匯流到同一個節點，才回到這一層接著畫；匯流到不同地方就由最外層補畫。
+      id = merges.size === 1 ? [...merges][0] : undefined
+      isResumed = true
+    }
+    return null
+  }
+
+  for (const node of nodes) {
+    if ((inDegree.get(node.id) ?? 0) === 0 && !seen.has(node.id)) walk(node.id, 0, '')
+  }
+  for (const node of nodes) {
+    if (!seen.has(node.id)) walk(node.id, 0, '')
+  }
+  return lines
+}
+
 // 模型常把象限圖座標寫成「名稱: 0.3, 0.6」，補成 Mermaid 要求的中括號。
 export function repairQuadrant(mermaid: string): string {
   return mermaid

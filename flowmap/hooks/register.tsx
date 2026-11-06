@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { FlowMap, FlowView } from '../types'
-import { BOOT_HTML, BOOT_READY, bootScripts, buildHtml, checkFlow, CMUX_LIMIT, findPane, JUDGE, mermaidForImage, parseReply, parseSurface, renderScripts, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
+import { BOOT_HTML, BOOT_READY, bootScripts, buildHtml, checkFlow, CMUX_LIMIT, findPane, JUDGE, mermaidForImage, outlineFlow, parseReply, parseSurface, renderScripts, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
 
 const PANE = 'flowmap'
@@ -417,34 +417,27 @@ export const register: Register = on => {
       )
     }
 
-    const order = current.nodes.map(node => node.id)
-    const labelOf = new Map(current.nodes.map(node => [node.id, node.label]))
+    // 依流程攤成縮排大綱：每個節點只畫一次，分支縮排在判斷底下，匯流處標「接到」。
     return (
       <Box flexDirection="column">
         {busy && <Text dimColor>更新中…</Text>}
         <Text bold>{current.summary.replace(/^摘要[:：]\s*/, '')}</Text>
         <Text> </Text>
-        {current.nodes.map((node, i) => {
-          const outs = current.edges.filter(edge => edge.from === node.id)
-          const isStraight = outs.length === 1 && outs[0]?.label === '' && outs[0]?.to === order[i + 1]
-          return (
-            <Box flexDirection="column">
-              <Text wrap="truncate-end">
-                <Text color={TERMINAL_COLORS[node.kind] ?? 'claude'}>{node.kind === 'decide' ? '◆ ' : '■ '}</Text>
-                <Text bold={node.kind !== 'step'}>{node.label}</Text>
-              </Text>
-              {isStraight && <Text dimColor>│</Text>}
-              {!isStraight &&
-                outs.map(edge => (
-                  <Text wrap="truncate-end">
-                    <Text dimColor>├▶ </Text>
-                    {edge.label !== '' && <Text color={TERMINAL_COLORS.decide}>{edge.label} </Text>}
-                    <Text dimColor>{labelOf.get(edge.to) ?? edge.to}</Text>
-                  </Text>
-                ))}
-            </Box>
-          )
-        })}
+        {outlineFlow(current.nodes, current.edges).map(line => (
+          <Box paddingLeft={Math.min(line.indent, 4) * 3}>
+            <Text>
+              {line.branch !== '' && <Text color={TERMINAL_COLORS.decide} bold>{`${line.branch}：`}</Text>}
+              {line.node === null ? (
+                <Text dimColor>{`接到「${line.jump}」`}</Text>
+              ) : (
+                <Text>
+                  <Text color={TERMINAL_COLORS[line.node.kind] ?? 'claude'}>{line.node.kind === 'decide' ? '◆ ' : '■ '}</Text>
+                  <Text bold={line.node.kind !== 'step'}>{line.node.label}</Text>
+                </Text>
+              )}
+            </Text>
+          </Box>
+        ))}
       </Box>
     )
   })

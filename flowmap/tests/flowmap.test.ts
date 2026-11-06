@@ -2,7 +2,7 @@ import type { On, RenderElement } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { BOOT_HTML, checkFlow, CMUX_LIMIT, findPane, JUDGE, parseReply, parseSurface, renderScripts, toDataUrl } from '../hooks/flow'
+import { BOOT_HTML, checkFlow, CMUX_LIMIT, findPane, JUDGE, outlineFlow, parseReply, parseSurface, renderScripts, toDataUrl } from '../hooks/flow'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -383,4 +383,51 @@ test('開對話時快轉拉取 mods repo，有更新才提示', async ($, on) =>
   await clock.advance(1)
   expect(argv.map(a => a.slice(3).join(' '))).toEqual(['rev-parse HEAD', 'pull --ff-only --quiet', 'rev-parse HEAD'])
   expect(toasts.length).toBe(1)
+})
+
+test('面板大綱每個節點只畫一次，分支縮排，匯流後回到外層', () => {
+  const parsed = parseReply([
+    '摘要：env-hint 未在遠端生效。',
+    '```mermaid',
+    'flowchart TD',
+    '  A["看不到 env-hint"]:::start --> B["原因：遠端執行"]:::warn --> F{"連線仍在?"}:::decide',
+    '  F -->|是| G["兩台 git pull"]:::step --> H["改 settings.json"]:::step --> J["重開對話"]:::step',
+    '  F -->|否| I["使用者自行處理"]:::warn --> J',
+    '  J --> L["讀到 env-hint"]:::done',
+    '  K["Mac 也要重開"]:::warn --> L',
+    '```',
+  ].join('\n'))
+  const lines = outlineFlow(parsed?.nodes ?? [], parsed?.edges ?? []).map(
+    line => `${'  '.repeat(line.indent)}${line.branch === '' ? '' : `${line.branch}：`}${line.node ? line.node.label : `接到「${line.jump}」`}`,
+  )
+  expect(lines).toEqual([
+    '看不到 env-hint',
+    '原因：遠端執行',
+    '連線仍在?',
+    '  是：兩台 git pull',
+    '  改 settings.json',
+    '  接到「重開對話」',
+    '  否：使用者自行處理',
+    '  接到「重開對話」',
+    '重開對話',
+    '讀到 env-hint',
+    'Mac 也要重開',
+    '接到「讀到 env-hint」',
+  ])
+})
+
+test('巢狀判斷匯流在分支裡時留在分支內，迴圈不會重複畫', () => {
+  const nodes = ['A', 'B', 'C', 'D', 'E', 'M', 'Z'].map(id => ({ id, label: id, kind: 'step' }))
+  const edges = [
+    { from: 'A', to: 'B', label: '是' },
+    { from: 'A', to: 'Z', label: '否' },
+    { from: 'B', to: 'C', label: '甲' },
+    { from: 'B', to: 'D', label: '乙' },
+    { from: 'C', to: 'M', label: '' },
+    { from: 'D', to: 'M', label: '' },
+    { from: 'M', to: 'E', label: '' },
+    { from: 'E', to: 'A', label: '' },
+  ]
+  const lines = outlineFlow(nodes, edges).map(line => `${line.indent}${line.branch}${line.node?.label ?? `>${line.jump}`}`)
+  expect(lines).toEqual(['0A', '1是B', '2甲C', '2>M', '2乙D', '2>M', '1M', '1E', '1>A', '1否Z'])
 })
