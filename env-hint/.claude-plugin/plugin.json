@@ -1,0 +1,5 @@
+{
+  "name": "env-hint",
+  "version": "0.2.0",
+  "description": "在輸入框下方的狀態列顯示目前的機器、資料夾與 git 分支"
+}
