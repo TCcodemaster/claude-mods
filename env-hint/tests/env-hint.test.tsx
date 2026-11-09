@@ -69,19 +69,30 @@ test('不在 git 目錄時只顯示機器與資料夾', async ($, on) => {
   await ui.unmount()
 })
 
-test('其他 mod 已畫在框裡時讓位', async ($, on) => {
+test('其他 mod 的按鈕排在同一行左側，環境資訊仍在右側，按鈕照樣可以按', async ($, on) => {
+  let pressed = 0
   seed(on, true)
   on('ui.render', ($, e) => {
-    const { Text } = $.ui.resolve(e)
+    const { Box, Button } = $.ui.resolve(e)
 
-    return <Text>flowmap 卡片</Text>
+    return (
+      <Box>
+        <Button key="flowmap-show" label="看圖解" onPress={() => { pressed += 1 }} />
+      </Box>
+    )
   })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
-  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ type: 'Text', text: 'flowmap 卡片' })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^tcMacBook-Air$/ })).toBeUndefined()
-  await ui.unmount()
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...BAND, surface })
+    const drawn = (await ui.drawn()) as { props: { justifyContent: string }; children: unknown[] }
+    expect(drawn.props.justifyContent).toBe('space-between')
+    expect(JSON.stringify(drawn.children[0])).toContain('看圖解')
+    expect(await ui.find({ type: 'Text', text: /^tcMacBook-Air$/ })).toBeDefined()
+    await ui.press({ key: 'flowmap-show', plugin: 'test' })
+    await ui.unmount()
+  }
+  expect(pressed).toBe(2)
 })
 
 test('分支後面顯示未提交的檔案數與未推送的提交數', async ($, on) => {
@@ -121,4 +132,24 @@ test('乾淨時不顯示數字；沒有上游時只顯示未提交', async ($, o
   expect(await desktop.find({ type: 'Box', key: 'env-hint-changes' })).toBeDefined()
   expect(await desktop.find({ type: 'Box', key: 'env-hint-unpushed' })).toBeUndefined()
   await desktop.unmount()
+})
+
+test('Windows 的 hostname 不接受 -s 時改用不帶參數的版本', async ($, on) => {
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.status', () => ({ value: undefined }))
+  on('session.cwd', () => ({ value: 'C:/Users/terry/proj' }))
+  on('process.run', (_, e) => ({
+    value:
+      e.argv[0] === 'hostname'
+        ? e.argv[1] === '-s'
+          ? { exitCode: 1, stdout: '', stderr: 'hostname -s is not supported.' }
+          : { exitCode: 0, stdout: 'DESKTOP-7OD1MSI\r\n', stderr: '' }
+        : { exitCode: 128, stdout: '', stderr: 'not a git repository' },
+  }))
+  on('ui.render', () => ({ type: 'engine', ref: 0 }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /^DESKTOP-7OD1MSI$/ })).toBeDefined()
+  await ui.unmount()
 })

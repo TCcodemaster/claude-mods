@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, RenderElement } from 'claude-code'
 
 import type { Env } from '../types'
 
@@ -35,7 +35,8 @@ const refresh = async ($: EngineInterface) => {
   const cwd = await $.session.cwd()
   const branch = await firstLine($, ['git', 'branch', '--show-current'], cwd)
   const now: Env = {
-    machine: await firstLine($, ['hostname', '-s']),
+    // Windows 的 hostname 不接受 -s，失敗就改用不帶參數的版本。
+    machine: (await firstLine($, ['hostname', '-s'])) ?? (await firstLine($, ['hostname'])),
     folder: cwd.split('/').filter(Boolean).pop() ?? cwd,
     branch,
     ...(branch === null ? { changes: 0, unpushed: null } : await gitCounts($, cwd)),
@@ -74,14 +75,15 @@ export const register: Register = on => {
     return done
   })
 
-  // 輸入框上方的框同時只能畫一個 mod：其他 mod（如 flowmap）要用時先讓位。
+  // 輸入框上方這一行：其他 mod（如 flowmap 的「看圖解」按鈕）畫的內容放左側，環境資訊放右側。
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const below = await next(e)
     const now = await read($, env)
 
-    if (below.type !== 'engine' || e.props.hasSurvey || now === null) {
+    if (e.props.hasSurvey || now === null) {
       return below
     }
+    const other = below.type === 'engine' ? null : below
 
     const { Box, Text } = $.ui.resolve(e)
     const counts = [
@@ -105,17 +107,17 @@ export const register: Register = on => {
           counts.flatMap(item => [<Text dimColor>{`  ${item.label} `}</Text>, <Text color="warning" weight="bold">{String(item.count)}</Text>])}
       </Text>
     )
-    if (e.surface === 'terminal') {
-      return (
-        <Box width="100%" justifyContent="flex-end">
-          {line}
-        </Box>
-      )
-    }
+    const row = (right: RenderElement) => (
+      <Box width="100%" justifyContent={other ? 'space-between' : 'flex-end'} alignItems="center">
+        {other}
+        {right}
+      </Box>
+    )
+    if (e.surface === 'terminal') return row(line)
 
     const { Svg } = $.ui.resolve(e)
-    return (
-      <Box width="100%" justifyContent="flex-end" alignItems="center">
+    return row(
+      <Box alignItems="center">
         {line}
         {counts.map(item => (
           <Box key={`env-hint-${item.key}`} marginLeft={2} alignItems="center" gap={1}>
@@ -123,7 +125,7 @@ export const register: Register = on => {
             <Text size="body" color="warning" weight="bold">{String(item.count)}</Text>
           </Box>
         ))}
-      </Box>
+      </Box>,
     )
   })
 }

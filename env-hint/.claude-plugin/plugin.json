@@ -1,6 +1,6 @@
 {
   "name": "env-hint",
-  "version": "0.5.1",
+  "version": "0.6.1",
   "description": "在輸入框上方以顏色標示目前的機器、資料夾與 git 分支",
   "types": "./types/index.d.ts"
 }
