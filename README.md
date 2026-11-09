@@ -1,12 +1,13 @@
 # Claude Code mods
 
-三個 Claude Code mod（function hooks 外掛），在 Claude Code 自己的介面裡運作。
+四個 Claude Code mod（function hooks 外掛），在 Claude Code 自己的介面裡運作。
 
 | mod | 功能 | 指令 |
 |---|---|---|
 | flowmap | 長回應結束後由 Haiku 判斷是否值得畫圖，值得就由主模型產生 Mermaid 圖，顯示在 cmux 瀏覽器窗格；預設不顯示，輸入框上方左側出現精簡的「看圖解 · 不用」按鈕（VS Code 擴充套件改用通知），按了才打開；env-hint 的環境資訊照樣留在同一行右側；圖解頁面可以編輯 Mermaid 語法重畫，並匯出 SVG、PNG、Mermaid 原始碼 | `/flow`、`/flow hide`、`/flow on\|off`、`/flow web on\|off` |
 | gitgraph | 仿 GitHub Desktop 的提交列表，可同時勾選多條分支比對 | `/branches`、`/branches 分支 分支`、`/branches all`、`/branches hide` |
 | env-hint | 在輸入框上方靠右顯示「機器 / 資料夾 / 分支」，依序為藍色粗體、綠、紫色，後面用鉛筆 icon 標未提交的檔案數、向上箭頭 icon 標未推送的提交數（0 就不顯示；終端機改用文字）；不在 git 目錄時只顯示機器與資料夾。開對話、送出訊息與回應結束時更新；flowmap 的「看圖解」按鈕排在同一行左側 | 無 |
+| ledger-hint | 把 Ledger 自動同步的消息改成提醒小框：推送時 git hook 印出的［Ledger］提醒、背景同步的成功與失敗（認證過期會標出來），以及開對話時尚待補跑的專案；每 20 秒讀一次 `~/.ledger_hook.log` 的新增內容，推送後 10 秒提早讀一次；背景執行的 `claude -p` 沒有畫面，不會提醒 | 無 |
 
 ## 安裝
 
@@ -20,7 +21,7 @@
 
    ```json
    "env": {
-     "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/flowmap:~/.claude/mods/gitgraph:~/.claude/mods/env-hint",
+     "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/flowmap:~/.claude/mods/gitgraph:~/.claude/mods/env-hint:~/.claude/mods/ledger-hint",
      "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1"
    }
    ```
@@ -71,4 +72,5 @@
 claude plugin validate flowmap && claude plugin test flowmap
 claude plugin validate gitgraph && claude plugin test gitgraph
 claude plugin validate env-hint && claude plugin test env-hint
+claude plugin validate ledger-hint && claude plugin test ledger-hint
 ```

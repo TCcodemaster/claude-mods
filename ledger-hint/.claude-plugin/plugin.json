@@ -1,0 +1,5 @@
+{
+  "name": "ledger-hint",
+  "version": "0.1.0",
+  "description": "把 Ledger 自動同步的推送提醒、成功與失敗結果，以及尚待補跑的專案顯示成提醒小框"
+}
