@@ -56,6 +56,15 @@
 - 判斷要不要畫用 Haiku，畫圖用對話當下的主模型（沿用快取），都算在使用者自己的 Claude 額度。
 - gitgraph 只需要 git；它的面板在 VS Code 擴充套件裡不會顯示，只能在終端機裡使用。
 
+## 檢查各台機器是否一致
+
+```sh
+~/.claude/mods/check-machines.sh            # 本機加上 ~/.ssh/config 裡的每台主機
+~/.claude/mods/check-machines.sh R-engine   # 只檢查指定的主機
+```
+
+逐台回報 claude-mods 的提交、是否落後或超前 GitHub、有沒有未提交的修改，以及 `settings.json` 載入了哪些 mod。只做唯讀檢查，不改任何檔案；連不上或需要密碼的主機會標出原因，同一台機器的多個別名只檢查一次。
+
 ## 測試
 
 ```sh
