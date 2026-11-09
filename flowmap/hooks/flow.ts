@@ -187,22 +187,41 @@ export function depthOf(nodes: FlowNode[], edges: FlowEdge[]): number {
   return Math.max(0, ...level.values())
 }
 
-// 面板上的一行：縮排層數、分支標籤，以及這一行畫的節點；node 為 null 代表「接到」已畫過或稍後會畫的節點。
-export type FlowLine = { indent: number; branch: string; node: FlowNode | null; jump: string }
+// 面板上的一行：節點、「接到」某個節點，或「繼續往下」（這條分支就是下面接著畫的主線）。
+export type FlowLine =
+  | { kind: 'node'; indent: number; branch: string; node: FlowNode }
+  | { kind: 'jump'; indent: number; branch: string; target: string; label: string; isMerge: boolean }
+  | { kind: 'down'; indent: number; branch: string }
 
-// 把流程圖攤成縮排大綱：每個節點只出現一次，分支縮排在判斷底下，
-// 分支在同一個節點匯流時，各分支標「接到」，匯流點回到外層接著畫。
+type Stop = { merge: string; hits: number } | null
+
+// 把流程圖攤成縮排大綱：每個節點只出現一次。判斷底下，走得最遠的分支當主線回到外層接著畫，
+// 其餘分支縮排；幾條分支匯流到下面接著畫的節點時不再重複標「接到」，回頭或跳到別處才標。
 export function outlineFlow(nodes: FlowNode[], edges: FlowEdge[]): FlowLine[] {
   const byId = new Map(nodes.map(node => [node.id, node]))
+  const outsOf = (id: string) => edges.filter(edge => edge.from === id)
   const inDegree = new Map<string, number>()
   for (const edge of edges) inDegree.set(edge.to, (inDegree.get(edge.to) ?? 0) + 1)
   const seen = new Set<string>()
   const lines: FlowLine[] = []
-  const jump = (indent: number, branch: string, id: string) =>
-    lines.push({ indent, branch, node: null, jump: byId.get(id)?.label ?? id })
+  const jump = (indent: number, branch: string, target: string, isMerge: boolean): FlowLine => ({
+    kind: 'jump', indent, branch, target, label: byId.get(target)?.label ?? target, isMerge,
+  })
 
-  // 沿主線往下畫；在分支裡碰到匯流點就停，把匯流點交回上一層。
-  const walk = (start: string, indent: number, branch: string): string | null => {
+  // 從這裡還走得到幾個沒畫過的節點，用來挑主線。
+  const reach = (start: string): number => {
+    const found = new Set<string>()
+    const stack = [start]
+    for (let id = stack.pop(); id !== undefined; id = stack.pop()) {
+      if (found.has(id) || seen.has(id) || !byId.has(id)) continue
+      found.add(id)
+      for (const edge of outsOf(id)) stack.push(edge.to)
+    }
+    return found.size
+  }
+
+  // 沿主線往下畫；在分支裡碰到匯流點就停，把匯流點和抵達的邊數交回上一層。
+  const walk = (start: string, indent: number, branch: string, out: FlowLine[]): Stop => {
     let id: string | undefined = start
     let label = branch
     // 剛從分支匯流回來的節點就畫在這一層，不再往外交。
@@ -211,36 +230,72 @@ export function outlineFlow(nodes: FlowNode[], edges: FlowEdge[]): FlowLine[] {
       const node = byId.get(id)
       if (!node) return null
       if (seen.has(id)) {
-        jump(indent, label, id)
+        out.push(jump(indent, label, id, false))
         return null
       }
       if (indent > 0 && !isResumed && (inDegree.get(id) ?? 0) > 1) {
-        jump(indent, label, id)
-        return id
+        out.push(jump(indent, label, id, true))
+        return { merge: id, hits: 1 }
       }
       seen.add(id)
-      lines.push({ indent, branch: label, node, jump: '' })
+      out.push({ kind: 'node', indent, branch: label, node })
       label = ''
       isResumed = false
-      const outs = edges.filter(edge => edge.from === id)
+      const outs = outsOf(id)
       const only = outs[0]
-      if (outs.length === 1 && only && only.label === '') {
+      if (!only) return null
+      if (outs.length === 1 && only.label === '') {
         id = only.to
         continue
       }
-      const merges = new Set(outs.map(edge => walk(edge.to, indent + 1, edge.label)).filter(m => m !== null))
-      // 所有分支匯流到同一個節點，才回到這一層接著畫；匯流到不同地方就由最外層補畫。
-      id = merges.size === 1 ? [...merges][0] : undefined
+
+      const sizes = outs.map(edge => reach(edge.to))
+      const main = sizes.indexOf(Math.max(...sizes))
+      const mainEdge = outs[main] ?? only
+      const parts: FlowLine[][] = outs.map(() => [])
+      const stops: Stop[] = outs.map(() => null)
+      outs.forEach((edge, i) => {
+        if (i !== main) stops[i] = walk(edge.to, indent + 1, edge.label, parts[i] ?? [])
+      })
+      const sideMerges = new Set(stops.flatMap(stop => (stop ? [stop.merge] : [])))
+      let next: string | undefined
+      if (!seen.has(mainEdge.to) && (sideMerges.size === 0 || (sideMerges.size === 1 && sideMerges.has(mainEdge.to)))) {
+        // 其他分支都到此為止或併回主線：主線留在這一層繼續畫。
+        next = mainEdge.to
+        if (mainEdge.label !== '') parts[main]?.push({ kind: 'down', indent: indent + 1, branch: mainEdge.label })
+      } else {
+        stops[main] = walk(mainEdge.to, indent + 1, mainEdge.label, parts[main] ?? [])
+        const merges = new Set(stops.flatMap(stop => (stop ? [stop.merge] : [])))
+        const merge = merges.size === 1 ? [...merges][0] : undefined
+        if (merge !== undefined) {
+          const hits = stops.reduce((sum, stop) => sum + (stop?.merge === merge ? stop.hits : 0), 0)
+          // 還有別處的邊連到匯流點：交給外層畫，這層的「接到」留著。
+          if (indent > 0 && hits < (inDegree.get(merge) ?? 0)) {
+            out.push(...parts.flat())
+            return { merge, hits }
+          }
+          next = merge
+        }
+      }
+      // 匯流點就畫在下面時，各分支的「接到」改成不標；沒有任何節點的分支改標「繼續往下」。
+      for (const line of parts.flat()) {
+        if (next !== undefined && line.kind === 'jump' && line.isMerge && line.target === next && line.indent === indent + 1) {
+          if (line.branch !== '') out.push({ kind: 'down', indent: line.indent, branch: line.branch })
+          continue
+        }
+        out.push(line)
+      }
+      id = next
       isResumed = true
     }
     return null
   }
 
   for (const node of nodes) {
-    if ((inDegree.get(node.id) ?? 0) === 0 && !seen.has(node.id)) walk(node.id, 0, '')
+    if ((inDegree.get(node.id) ?? 0) === 0 && !seen.has(node.id)) walk(node.id, 0, '', lines)
   }
   for (const node of nodes) {
-    if (!seen.has(node.id)) walk(node.id, 0, '')
+    if (!seen.has(node.id)) walk(node.id, 0, '', lines)
   }
   return lines
 }

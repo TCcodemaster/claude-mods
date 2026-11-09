@@ -3,6 +3,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { BOOT_HTML, checkFlow, CMUX_LIMIT, findPane, JUDGE, outlineFlow, parseReply, parseSurface, renderScripts, toDataUrl } from '../hooks/flow'
+import type { FlowLine } from '../hooks/flow'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -385,7 +386,12 @@ test('開對話時快轉拉取 mods repo，有更新才提示', async ($, on) =>
   expect(toasts.length).toBe(1)
 })
 
-test('面板大綱每個節點只畫一次，分支縮排，匯流後回到外層', () => {
+const show = (line: FlowLine) =>
+  `${'  '.repeat(line.indent)}${line.branch === '' ? '' : `${line.branch}：`}${
+    line.kind === 'node' ? line.node.label : line.kind === 'jump' ? `接到「${line.label}」` : '繼續往下'
+  }`
+
+test('面板大綱每個節點只畫一次，分支匯流後回到外層，不重複標接到', () => {
   const parsed = parseReply([
     '摘要：env-hint 未在遠端生效。',
     '```mermaid',
@@ -397,18 +403,13 @@ test('面板大綱每個節點只畫一次，分支縮排，匯流後回到外�
     '  K["Mac 也要重開"]:::warn --> L',
     '```',
   ].join('\n'))
-  const lines = outlineFlow(parsed?.nodes ?? [], parsed?.edges ?? []).map(
-    line => `${'  '.repeat(line.indent)}${line.branch === '' ? '' : `${line.branch}：`}${line.node ? line.node.label : `接到「${line.jump}」`}`,
-  )
-  expect(lines).toEqual([
+  expect(outlineFlow(parsed?.nodes ?? [], parsed?.edges ?? []).map(show)).toEqual([
     '看不到 env-hint',
     '原因：遠端執行',
     '連線仍在?',
     '  是：兩台 git pull',
     '  改 settings.json',
-    '  接到「重開對話」',
     '  否：使用者自行處理',
-    '  接到「重開對話」',
     '重開對話',
     '讀到 env-hint',
     'Mac 也要重開',
@@ -416,18 +417,61 @@ test('面板大綱每個節點只畫一次，分支縮排，匯流後回到外�
   ])
 })
 
-test('巢狀判斷匯流在分支裡時留在分支內，迴圈不會重複畫', () => {
-  const nodes = ['A', 'B', 'C', 'D', 'E', 'M', 'Z'].map(id => ({ id, label: id, kind: 'step' }))
+test('主線留在外層繼續畫，終止或回頭的分支縮排在判斷底下', () => {
+  const parsed = parseReply([
+    '摘要：安裝流程。',
+    '```mermaid',
+    'flowchart TD',
+    '  A{"連線結果?"}:::decide',
+    '  A -->|逾時| B["手動安裝"]:::warn',
+    '  A -->|要密碼| C["設定金鑰"]:::warn --> A',
+    '  A -->|成功| D{"mods 在哪?"}:::decide',
+    '  D -->|預設路徑| P1["git pull"]:::step --> E',
+    '  D -->|沒有| P2["git clone"]:::step --> E',
+    '  E{"快轉成功?"}:::decide',
+    '  E -->|否| W["請使用者處理"]:::warn --> D',
+    '  E -->|是| S["改設定"]:::step --> Z["完成"]:::done',
+    '```',
+  ].join('\n'))
+  expect(outlineFlow(parsed?.nodes ?? [], parsed?.edges ?? []).map(show)).toEqual([
+    '連線結果?',
+    '  逾時：手動安裝',
+    '  要密碼：設定金鑰',
+    '  接到「連線結果?」',
+    '  成功：繼續往下',
+    'mods 在哪?',
+    '  預設路徑：git pull',
+    '  沒有：git clone',
+    '快轉成功?',
+    '  否：請使用者處理',
+    '  接到「mods 在哪?」',
+    '  是：繼續往下',
+    '改設定',
+    '完成',
+  ])
+})
+
+test('巢狀判斷：匯流點還有外層的邊連入時交給外層畫', () => {
+  const nodes = ['O', 'I', 'X', 'Y', 'Z', 'M', 'END'].map(id => ({ id, label: id, kind: 'step' }))
   const edges = [
-    { from: 'A', to: 'B', label: '是' },
-    { from: 'A', to: 'Z', label: '否' },
-    { from: 'B', to: 'C', label: '甲' },
-    { from: 'B', to: 'D', label: '乙' },
-    { from: 'C', to: 'M', label: '' },
-    { from: 'D', to: 'M', label: '' },
-    { from: 'M', to: 'E', label: '' },
-    { from: 'E', to: 'A', label: '' },
+    { from: 'O', to: 'I', label: '是' },
+    { from: 'O', to: 'Z', label: '否' },
+    { from: 'I', to: 'X', label: 'a' },
+    { from: 'I', to: 'Y', label: 'b' },
+    { from: 'X', to: 'M', label: '' },
+    { from: 'Y', to: 'M', label: '' },
+    { from: 'Z', to: 'M', label: '' },
+    { from: 'M', to: 'END', label: '' },
   ]
-  const lines = outlineFlow(nodes, edges).map(line => `${line.indent}${line.branch}${line.node?.label ?? `>${line.jump}`}`)
-  expect(lines).toEqual(['0A', '1是B', '2甲C', '2>M', '2乙D', '2>M', '1M', '1E', '1>A', '1否Z'])
+  expect(outlineFlow(nodes, edges).map(show)).toEqual([
+    'O',
+    '  是：I',
+    '    a：X',
+    '    接到「M」',
+    '    b：Y',
+    '    接到「M」',
+    '  否：Z',
+    'M',
+    'END',
+  ])
 })

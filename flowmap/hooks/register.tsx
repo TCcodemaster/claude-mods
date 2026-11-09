@@ -427,9 +427,9 @@ export const register: Register = on => {
           <Box paddingLeft={Math.min(line.indent, 4) * 3}>
             <Text>
               {line.branch !== '' && <Text color={TERMINAL_COLORS.decide} bold>{`${line.branch}：`}</Text>}
-              {line.node === null ? (
-                <Text dimColor>{`接到「${line.jump}」`}</Text>
-              ) : (
+              {line.kind === 'jump' && <Text dimColor>{`接到「${line.label}」`}</Text>}
+              {line.kind === 'down' && <Text dimColor>繼續往下</Text>}
+              {line.kind === 'node' && (
                 <Text>
                   <Text color={TERMINAL_COLORS[line.node.kind] ?? 'claude'}>{line.node.kind === 'decide' ? '◆ ' : '■ '}</Text>
                   <Text bold={line.node.kind !== 'step'}>{line.node.label}</Text>
