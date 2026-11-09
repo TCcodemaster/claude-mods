@@ -4,6 +4,7 @@ import type { Elements, EngineInterface, Register } from 'claude-code'
 import type { FlowMap, FlowView } from '../types'
 import { BOOT_HTML, BOOT_READY, bootScripts, buildHtml, checkFlow, CMUX_LIMIT, findPane, JUDGE, mermaidForImage, outlineFlow, parseReply, parseSurface, renderScripts, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
+import { flowSvg } from './svg'
 
 const PANE = 'flowmap'
 const TITLE = '圖解'
@@ -417,7 +418,20 @@ export const register: Register = on => {
       )
     }
 
-    // 依流程攤成縮排大綱：每個節點只畫一次，分支縮排在判斷底下，匯流處標「接到」。
+    // 桌面版、VS Code 與手機能畫 SVG：直接畫成流程圖。
+    if (e.surface !== 'terminal') {
+      const { Svg } = $.ui.resolve(e)
+      const summary = current.summary.replace(/^摘要[:：]\s*/, '')
+      return (
+        <Box flexDirection="column" gap={1}>
+          {busy && <Text dimColor>更新中…</Text>}
+          <Text bold>{summary}</Text>
+          <Svg source={flowSvg(current.nodes, current.edges)} alt={`流程圖：${summary}；步驟依序為${current.nodes.map(node => node.label).join('、')}`} />
+        </Box>
+      )
+    }
+
+    // 終端機不能畫 SVG，改攤成縮排大綱：每個節點只畫一次，分支縮排在判斷底下，匯流處標「接到」。
     return (
       <Box flexDirection="column">
         {busy && <Text dimColor>更新中…</Text>}

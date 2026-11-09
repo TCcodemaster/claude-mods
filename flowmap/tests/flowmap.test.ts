@@ -4,6 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { BOOT_HTML, checkFlow, CMUX_LIMIT, findPane, JUDGE, outlineFlow, parseReply, parseSurface, renderScripts, toDataUrl } from '../hooks/flow'
 import type { FlowLine } from '../hooks/flow'
+import { flowSvg, layoutFlow, wrapLabel } from '../hooks/svg'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -474,4 +475,73 @@ test('巢狀判斷：匯流點還有外層的邊連入時交給外層畫', () =>
     'M',
     'END',
   ])
+})
+
+const INSTALL = [
+  '摘要：安裝流程。',
+  '```mermaid',
+  'flowchart TD',
+  '  A{"連線結果?"}:::decide',
+  '  A -->|逾時| B["手動安裝"]:::warn',
+  '  A -->|要密碼| C["設定金鑰"]:::warn --> A',
+  '  A -->|成功| D{"mods 在哪?"}:::decide',
+  '  D -->|預設路徑| P1["git pull"]:::step --> E',
+  '  D -->|沒有| P2["git clone"]:::step --> E',
+  '  E{"快轉成功?"}:::decide',
+  '  E -->|否| W["請使用者處理"]:::warn --> D',
+  '  E -->|是| S["改設定"]:::step --> Z["完成"]:::done',
+  '```',
+].join('\n')
+
+test('SVG 流程圖：同一層節點不重疊，主線排成一直線，迴圈改成「回到」標籤', () => {
+  const parsed = parseReply(INSTALL)
+  const layout = layoutFlow(parsed?.nodes ?? [], parsed?.edges ?? [])
+  const real = [...layout.items.values()].filter(item => item.node)
+  for (const a of real) {
+    for (const b of real) {
+      if (a === b || a.rank !== b.rank) continue
+      expect(Math.abs(a.x - b.x) >= (a.w + b.w) / 2).toBe(true)
+    }
+  }
+  const x = (id: string) => layout.items.get(id)?.x
+  expect(new Set([x('A'), x('D'), x('E'), x('S'), x('Z')]).size).toBe(1)
+  expect(layout.chains.every(chain => (layout.items.get(chain.ids[0] ?? '')?.rank ?? 0) < (layout.items.get(chain.ids.at(-1) ?? '')?.rank ?? 0))).toBe(true)
+  const svg = flowSvg(parsed?.nodes ?? [], parsed?.edges ?? [])
+  expect(svg.startsWith('<svg')).toBe(true)
+  expect(svg).toContain('回到「連線結果?」')
+  expect(svg).toContain('回到「mods')
+  for (const label of ['連線結果?', '手動安裝', 'git clone', '完成', '逾時', '是']) expect(svg).toContain(label)
+})
+
+test('SVG 流程圖：特殊字元會跳脫，32 個節點仍在 Svg 長度上限內', () => {
+  const nodes = Array.from({ length: 32 }, (_, i) => ({ id: `N${i}`, label: `步驟 ${i} <a & "b">`, kind: i % 5 === 0 ? 'decide' : 'step' }))
+  const edges = nodes.slice(1).map((node, i) => ({ from: `N${i}`, to: node.id, label: i % 5 === 0 ? '是' : '' }))
+  const svg = flowSvg(nodes, edges)
+  expect(svg).toContain('步驟 0 &lt;')
+  expect(svg).toContain('a &amp; &quot;b&quot;&gt;')
+  expect(svg).not.toContain('<a &')
+  expect(svg.length).toBeLessThan(131072)
+})
+
+test('標籤折行時各行寬度平均，不留下單獨一個字', () => {
+  expect(wrapLabel('出現彩色提示即完成')).toEqual(['出現彩色提', '示即完成'])
+  expect(wrapLabel('短標籤')).toEqual(['短標籤'])
+  expect(wrapLabel('請使用者 ssh-copy-id')).toEqual(['請使用者', 'ssh-copy-id'])
+  expect(wrapLabel('步驟4 備份 settings.json')).toEqual(['步驟4 備份', 'settings.json'])
+})
+
+test('面板：桌面版畫 SVG 流程圖，終端機畫縮排大綱', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = setup(on, seen, INSTALL)
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  await look($)
+  const desktop = await $.ui.mount({ plugin: 'flowmap', surface: 'desktop', component: 'Pane', requestId: 'flowmap', props: {} as never })
+  const svg = await desktop.find({ type: 'Svg' })
+  expect(String(svg?.props.source)).toContain('回到「連線結果?」')
+  expect(String(svg?.props.alt)).toContain('安裝流程。')
+  const terminal = await $.ui.mount({ plugin: 'flowmap', surface: 'terminal', component: 'Pane', requestId: 'flowmap', props: {} as never })
+  expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
+  expect(await terminal.find({ type: 'Text', text: '繼續往下' })).toBeDefined()
 })
