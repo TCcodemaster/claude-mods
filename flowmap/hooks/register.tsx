@@ -270,38 +270,32 @@ function isCardShown(current: FlowView | null): current is FlowView {
   return current !== null && current.state !== 'judging' && current.state !== 'skipped'
 }
 
-// 圓角卡片：左邊標籤，右邊問句與按鈕。按鈕帶數字快捷鍵，提示框是空的時候直接按 1、2 就能選。
+// 精簡提示：一行、沒有外框，「看圖解 · 不用」兩個按鈕（產生中是一行淡字加取消，打開後是收起），
+// 放在輸入框上方左側；env-hint 的環境資訊排在同一行右側。按鈕帶快捷鍵 1、2。
 function drawCard($: EngineInterface, ui: Pick<Elements['vscode'], 'Box' | 'Button' | 'Text'>, current: FlowView) {
   const { Box, Button, Text } = ui
   const turn = current.turn
-  const message = {
-    offer: '要看這則回應的圖解嗎？',
-    wanted: '圖解產生中，完成後會自動打開。',
-    shown: '圖解已經打開在右側。',
-  }[current.state as 'offer' | 'wanted' | 'shown']
+  if (current.state === 'wanted') {
+    return (
+      <Box gap={1} alignItems="center">
+        <Text dimColor>圖解產生中…</Text>
+        <Button key="flowmap-cancel" label="取消" hotkey="1" plain dimColor onPress={() => setView($, turn, 'offer')} />
+      </Box>
+    )
+  }
   const actions =
     current.state === 'shown'
-      ? [{ key: 'flowmap-hide', label: '收起', run: () => hide($, turn) }]
-      : current.state === 'wanted'
-        ? [{ key: 'flowmap-cancel', label: '取消', run: () => setView($, turn, 'offer') }]
-        : [
-            { key: 'flowmap-show', label: '看圖解', run: () => show($, turn) },
-            { key: 'flowmap-dismiss', label: '不用', run: () => setView($, turn, 'skipped') },
-          ]
+      ? [{ key: 'flowmap-hide', label: '收起圖解', run: () => hide($, turn) }]
+      : [
+          { key: 'flowmap-show', label: '看圖解', run: () => show($, turn) },
+          { key: 'flowmap-dismiss', label: '不用', run: () => setView($, turn, 'skipped') },
+        ]
   return (
-    <Box borderStyle="round" borderColor={TERMINAL_COLORS.start} paddingX={1} gap={2} alignSelf="flex-start">
-      <Text color={TERMINAL_COLORS.start} bold>
-        ◆ 圖解
-      </Text>
-      <Box flexDirection="column">
-        <Text>{message}</Text>
-        <Box gap={1}>
-          {actions.flatMap((action, i) => [
-            ...(i > 0 ? [<Text dimColor>·</Text>] : []),
-            <Button key={action.key} label={action.label} hotkey={String(i + 1)} plain onPress={action.run} />,
-          ])}
-        </Box>
-      </Box>
+    <Box alignItems="center" gap={1}>
+      {actions.flatMap((action, i) => [
+        ...(i > 0 ? [<Text dimColor>·</Text>] : []),
+        <Button key={action.key} label={action.label} hotkey={String(i + 1)} plain onPress={action.run} />,
+      ])}
     </Box>
   )
 }
@@ -387,11 +381,21 @@ export const register: Register = on => {
   })
 
   // 終端機（含 SSH 與 VS Code 內建終端機）與桌機版畫在提示框上方。
+  // 按鈕放左側；下層 mod（例如 env-hint 的環境資訊）畫的內容照樣保留，排在同一行右側。
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const current = await read($, view)
     // 新的回合在跑時先收起，等回應結束再換成新的一則。
     if (e.props.hasSurvey || e.props.isWorking || !isCardShown(current)) return next(e)
-    return drawCard($, $.ui.resolve(e), current)
+    const ui = $.ui.resolve(e)
+    const card = drawCard($, ui, current)
+    const below = await next(e)
+    if (below.type === 'engine') return card
+    return (
+      <ui.Box width="100%" alignItems="center" gap={2}>
+        {card}
+        <ui.Box flexGrow={1}>{below}</ui.Box>
+      </ui.Box>
+    )
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {

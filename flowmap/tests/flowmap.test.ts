@@ -214,6 +214,8 @@ test('在 VS Code 裡沒裝檢視器時渲染成 PNG 並用 VS Code 打開', asy
   mock.store(on)
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   mock.env(on, { HOME: '/home/t', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', PATH: '/usr/bin' })
+  // 引擎自己的提示列：下層沒有其他 mod 畫東西。
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('fs.write', (_$, e) => {
     seen.files.push(e.path)
@@ -239,6 +241,8 @@ test('在 VS Code 裡裝了檢視器時寫出網頁給它顯示', async ($, on) 
   mock.store(on)
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   mock.env(on, { HOME: '/home/t', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode', VSCODE_PID: '42' })
+  // 引擎自己的提示列：下層沒有其他 mod 畫東西。
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'engine', ref: 0 }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('fs.list', () => ({ value: [{ name: 'tccodemaster.flowmap-viewer-0.1.0', type: 'dir' }] as never }))
   on('fs.write', (_$, e) => {
@@ -255,6 +259,8 @@ test('在 VS Code 裡裝了檢視器時寫出網頁給它顯示', async ($, on) 
   await clock.advance(1)
   await look($)
   expect(seen.files.slice(-2)).toEqual(['/home/t/.claude/flowmap/vscode-42.html', '/home/t/.claude/flowmap/vscode-42.json'])
+  const band = await $.ui.mount({ plugin: 'flowmap', component: 'AbovePrompt', surface: 'desktop', props: { hasSurvey: false, isWorking: false } as never })
+  expect(JSON.stringify(await band.drawn())).not.toContain('flexGrow')
   expect(seen.argv).toEqual([])
 })
 
@@ -293,7 +299,7 @@ test('第一次畫錯時帶著問題清單重畫一次', async ($, on) => {
 
 const BAND = { plugin: 'flowmap', component: 'AbovePrompt', props: { hasSurvey: false, isWorking: false } as never } as const
 
-test('預設不顯示，詢問要看圖解嗎；按「看圖解」才打開背景先畫好的圖', async ($, on) => {
+test('預設不顯示，只出現精簡的「看圖解 · 不用」；按了才打開背景先畫好的圖', async ($, on) => {
   const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
   const clock = setup(on, seen)
   await $.turn.complete(answer('步驟'.repeat(400)))
@@ -302,24 +308,40 @@ test('預設不顯示，詢問要看圖解嗎；按「看圖解」才打開背�
   expect(seen.prompts.length).toBe(1)
   expect(seen.argv).toEqual([])
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
+  const offer = JSON.stringify(await band.drawn())
+  expect(offer).toContain('看圖解')
+  expect(offer).not.toContain('borderStyle')
+  expect(offer).toContain('flowmap-dismiss')
+  // 下層畫的內容（測試裡是「引擎預設」，實際上是 env-hint 的環境資訊）保留在同一行。
+  expect(offer).toContain('引擎預設')
   await band.press({ key: 'flowmap-show' })
   expect(seen.prompts.length).toBe(1)
   expect(seen.argv.some(argv => argv[1] === 'browser' && argv[2] === 'open-split')).toBe(true)
-  expect(JSON.stringify(await band.drawn())).toContain('圖解已經打開在右側')
+  expect(JSON.stringify(await band.drawn())).toContain('收起圖解')
   await band.press({ key: 'flowmap-hide' })
   expect(seen.argv.at(-1)?.slice(0, 3)).toEqual(['/bin/cmux', 'rpc', 'surface.close'])
   expect(JSON.parse(seen.argv.at(-1)?.[3] ?? '{}')).toEqual({ workspace_id: 'ws-1', surface_id: 'abc-123' })
-  expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
+  expect(JSON.stringify(await band.drawn())).toContain('看圖解')
 })
 
-test('按「不用」後按鈕列消失', async ($, on) => {
+test('按「不用」後按鈕消失，只留下層的內容', async ($, on) => {
   const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
   const clock = setup(on, seen)
   await $.turn.complete(answer('步驟'.repeat(400)))
   await clock.advance(1)
-  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const band = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await band.press({ key: 'flowmap-dismiss' })
+  const drawn = JSON.stringify(await band.drawn())
+  expect(drawn).toContain('引擎預設')
+  expect(drawn).not.toContain('flowmap-show')
+})
+
+test('新的回合在跑時收起按鈕', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = setup(on, seen)
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  const band = await $.ui.mount({ plugin: 'flowmap', component: 'AbovePrompt', surface: 'terminal', props: { hasSurvey: false, isWorking: true } as never })
   expect(JSON.stringify(await band.drawn())).toContain('引擎預設')
 })
 
@@ -340,7 +362,7 @@ test('自動產生關閉時直接詢問，按「看圖解」才請模型畫', as
   await clock.advance(1)
   expect(seen.judged).toBe(0)
   const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
-  expect(JSON.stringify(await band.drawn())).toContain('要看這則回應的圖解嗎？')
+  expect(JSON.stringify(await band.drawn())).toContain('看圖解')
   await band.press({ key: 'flowmap-show' })
   expect(seen.prompts.length).toBe(1)
   expect(seen.argv.some(argv => argv[1] === 'browser' && argv[2] === 'open-split')).toBe(true)
