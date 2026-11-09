@@ -12,14 +12,15 @@ PROBE=$(cat <<'PY'
 import json, os, subprocess
 
 def git(repo, *args):
-    run = subprocess.run(['git', '-C', repo, *args], capture_output=True, text=True, timeout=30)
+    run = subprocess.run(['git', '-C', repo, *args], capture_output=True, text=True, encoding='utf-8', timeout=30)
     return run.stdout.strip() if run.returncode == 0 else None
 
 try:
     env = json.load(open(os.path.expanduser('~/.claude/settings.json'))).get('env', {})
 except Exception:
     env = {}
-paths = [os.path.expanduser(p.rstrip('/')) for p in env.get('CLAUDE_CODE_PLUGIN_DIRS', '').split(':') if p]
+# 路徑之間的分隔符號跟著系統走：Windows 是分號，其他是冒號。
+paths = [os.path.expanduser(p.rstrip('/\\')) for p in env.get('CLAUDE_CODE_PLUGIN_DIRS', '').split(os.pathsep) if p]
 mods = ','.join(os.path.basename(p) for p in paths) or '-'
 missing = ','.join(os.path.basename(p) for p in paths if not os.path.isdir(p)) or '-'
 repos = sorted({os.path.dirname(p) for p in paths if os.path.isdir(os.path.dirname(p))})
@@ -63,7 +64,12 @@ for host in "${HOSTS[@]}"; do
       continue
     fi
     seen+="$host|$target"$'\n'
-    out=$("${SSH[@]}" "$host" python3 - <<< "$PROBE" 2>&1)
+    # Windows 的預設殼層是 PowerShell，指令是 python；其他系統用 python3。
+    if [ "$("${SSH[@]}" "$host" 'echo $env:OS' 2>/dev/null | tr -d '\r' | tail -1)" = Windows_NT ]; then
+      out=$("${SSH[@]}" "$host" '$env:PYTHONIOENCODING="utf-8"; python -' <<< "$PROBE" 2>&1 | tr -d '\r')
+    else
+      out=$("${SSH[@]}" "$host" python3 - <<< "$PROBE" 2>&1)
+    fi
   fi
   if ! printf '%s' "$out" | grep -q $'\t'; then
     case "$out" in
