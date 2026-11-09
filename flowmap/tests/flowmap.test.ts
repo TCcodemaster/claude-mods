@@ -5,6 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { BOOT_HTML, checkFlow, CMUX_LIMIT, findPane, JUDGE, outlineFlow, parseReply, parseSurface, renderScripts, toDataUrl } from '../hooks/flow'
 import type { FlowLine } from '../hooks/flow'
 import { flowSvg, layoutFlow, wrapLabel } from '../hooks/svg'
+import { drawSequence, drawTimeline, parseSequence, parseTimeline } from '../hooks/diagrams'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
 const REPLY = [
@@ -570,4 +571,89 @@ test('面板工具列：上一張、下一張與縮放', async ($, on) => {
   const terminal = await $.ui.mount({ plugin: 'flowmap', surface: 'terminal', component: 'Pane', requestId: 'flowmap', props: {} as never })
   expect(await terminal.find({ type: 'Button', key: 'flowmap-prev' })).toBeDefined()
   expect(await terminal.find({ type: 'Button', key: 'flowmap-zoom-in' })).toBeUndefined()
+})
+
+const SEQUENCE = [
+  'sequenceDiagram',
+  '  participant U as 使用者',
+  '  actor D as 桌面版',
+  '  U->>D: 開新對話',
+  '  D->>+C: 啟動',
+  '  C->>C: 載入 mod',
+  '  Note over C,D: 背景拉取 <更新>',
+  '  alt 有新版',
+  '    C-->>D: 顯示已更新',
+  '  else 有未推送提交',
+  '    C--xD: 跳過',
+  '  end',
+  '  rect rgb(0,0,0)',
+  '    loop 每則回應',
+  '      C-)U: 詢問要不要看',
+  '    end',
+  '  end',
+].join('\n')
+
+test('時序圖：解析參與者、各種箭頭、註記與巢狀區塊', () => {
+  const parsed = parseSequence(SEQUENCE)
+  expect(parsed?.parties.map(p => `${p.id}:${p.label}:${p.isActor}`)).toEqual(['U:使用者:false', 'D:桌面版:true', 'C:C:false'])
+  const kinds = parsed?.steps.map(step => (step.kind === 'msg' ? `${step.from}>${step.to}:${step.head}:${step.isDashed}` : step.kind))
+  expect(kinds).toEqual(['U>D:arrow:false', 'D>C:arrow:false', 'C>C:arrow:false', 'note', 'open', 'C>D:arrow:true', 'else', 'C>D:cross:true', 'end', 'open', 'C>U:open:false', 'end'])
+  const svg = drawSequence(SEQUENCE)?.source ?? ''
+  expect(svg.startsWith('<svg')).toBe(true)
+  for (const text of ['使用者', '桌面版', '開新對話', '條件', '[有新版]', '[有未推送提交]', '重複', '背景拉取 &lt;更新&gt;']) expect(svg).toContain(text)
+  expect(drawSequence('sequenceDiagram\n  participant A')).toBeNull()
+})
+
+const TIMELINE = [
+  'timeline',
+  '  title 修改歷程',
+  '  section 11 月 6 日',
+  '    17:25 開始 : 狀態列版本 : 頁尾標籤失敗',
+  '    : 改在輸入框上方',
+  '  section 11 月 9 日',
+  '    10:30 : 時序圖與時間軸',
+  '    2026-12:之後再說',
+  '    只有時期',
+].join('\n')
+
+test('時間軸：時期、事件、接續行、分段與沒有空白的冒號', () => {
+  const parsed = parseTimeline(TIMELINE)
+  expect(parsed?.title).toBe('修改歷程')
+  expect(parsed?.sections).toEqual(['11 月 6 日', '11 月 9 日'])
+  expect(parsed?.periods.map(p => `${p.section}|${p.label}|${p.events.join('/')}`)).toEqual([
+    '0|17:25 開始|狀態列版本/頁尾標籤失敗/改在輸入框上方',
+    '1|10:30|時序圖與時間軸',
+    '1|2026-12|之後再說',
+    '1|只有時期|',
+  ])
+  const svg = drawTimeline(TIMELINE)?.source ?? ''
+  for (const text of ['修改歷程', '11 月 6 日', '17:25 開始', '改在輸入框上方', '之後再說']) expect(svg).toContain(text)
+  expect(drawTimeline('timeline\n  title 空的')).toBeNull()
+})
+
+test('面板：桌面版把時序圖畫成 SVG，不支援的種類列大綱', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const reply = '摘要：開對話時的更新流程。\n```mermaid\n' + SEQUENCE + '\n```'
+  const clock = setup(on, seen, reply)
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  await look($)
+  const pane = await $.ui.mount({ plugin: 'flowmap', surface: 'desktop', component: 'Pane', requestId: 'flowmap', props: {} as never })
+  const svg = await pane.find({ type: 'Svg' })
+  expect(String(svg?.props.source)).toContain('開新對話')
+  expect(String(svg?.props.alt)).toContain('時序圖')
+})
+
+test('面板：桌面版遇到還不會畫的種類改列大綱', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const reply = '摘要：資料表。\n```mermaid\nerDiagram\n  USER ||--o{ ORDER : places\n```'
+  const clock = setup(on, seen, reply)
+  await $.turn.complete(answer('步驟'.repeat(400)))
+  await clock.advance(1)
+  await clock.advance(1)
+  await look($)
+  const pane = await $.ui.mount({ plugin: 'flowmap', surface: 'desktop', component: 'Pane', requestId: 'flowmap', props: {} as never })
+  expect(await pane.find({ type: 'Svg' })).toBeUndefined()
+  expect(await pane.find({ type: 'Text', text: '資料表關聯圖的大綱' })).toBeDefined()
 })

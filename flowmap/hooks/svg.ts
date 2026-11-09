@@ -15,14 +15,14 @@ const MARGIN = 16
 const DUMMY_W = 10
 
 // 淺色寫在屬性上；深色用樣式覆蓋，樣式被濾掉時仍是可讀的淺色圖。
-const LIGHT: Record<string, [string, string]> = {
+export const LIGHT: Record<string, [string, string]> = {
   start: ['#e3efff', '#2f6fde'],
   step: ['#f3f4f6', '#8b95a5'],
   decide: ['#fff4d6', '#d99a00'],
   done: ['#e3f7ea', '#1f9d55'],
   warn: ['#ffe7e5', '#d63b2f'],
 }
-const DARK: Record<string, [string, string]> = {
+export const DARK: Record<string, [string, string]> = {
   start: ['#1d3a5c', '#7cb7ff'],
   step: ['#2a2f3a', '#aab4c3'],
   decide: ['#4a3a12', '#f2c14e'],
@@ -257,8 +257,8 @@ export function layoutFlow(given: FlowNode[], edges: FlowEdge[]): FlowLayout {
   }
 }
 
-const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-const n = (value: number) => Math.round(value * 10) / 10
+export const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+export const n = (value: number) => Math.round(value * 10) / 10
 
 // 分支標籤：字小一號，太長就折成兩行，放在箭頭進入目標之前。
 const LABEL_FONT = 13

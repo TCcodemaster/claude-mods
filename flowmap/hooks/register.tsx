@@ -4,6 +4,7 @@ import type { Elements, EngineInterface, Register } from 'claude-code'
 import type { FlowMap, FlowView } from '../types'
 import { BOOT_HTML, BOOT_READY, bootScripts, buildHtml, checkFlow, CMUX_LIMIT, findPane, JUDGE, mermaidForImage, outlineFlow, parseReply, parseSurface, renderScripts, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
+import { drawSequence, drawTimeline } from './diagrams'
 import { drawFlow } from './svg'
 
 const PANE = 'flowmap'
@@ -429,6 +430,36 @@ export const register: Register = on => {
       )
     }
 
+    // 桌面版、VS Code 與手機能畫 SVG：流程圖、時序圖與時間軸直接畫成圖，其他種類列大綱。
+    if (e.surface !== 'terminal') {
+      const summary = current.summary.replace(/^摘要[:：]\s*/, '')
+      const drawn =
+        current.diagram === 'flowchart'
+          ? drawFlow(current.nodes, current.edges)
+          : current.diagram === 'sequenceDiagram'
+            ? drawSequence(current.mermaid)
+            : current.diagram === 'timeline'
+              ? drawTimeline(current.mermaid)
+              : null
+      if (drawn) {
+        const { Svg } = $.ui.resolve(e)
+        const name = current.diagram === 'flowchart' ? '流程圖' : DIAGRAM_NAMES[current.diagram] ?? current.diagram
+        const steps = current.diagram === 'flowchart' ? current.nodes.map(node => node.label) : current.outline
+        return (
+          <Box flexDirection="column" gap={1}>
+            {busy && <Text dimColor>更新中…</Text>}
+            {toolbar}
+            <Text bold>{summary}</Text>
+            <Svg
+              source={drawn.source}
+              width={zoom === 1 ? undefined : Math.round(drawn.width * zoom)}
+              alt={`${name}：${summary}；內容依序為${steps.join('、')}`}
+            />
+          </Box>
+        )
+      }
+    }
+
     if (current.diagram !== 'flowchart') {
       return (
         <Box flexDirection="column">
@@ -442,25 +473,6 @@ export const register: Register = on => {
               {line}
             </Text>
           ))}
-        </Box>
-      )
-    }
-
-    // 桌面版、VS Code 與手機能畫 SVG：直接畫成流程圖。
-    if (e.surface !== 'terminal') {
-      const { Svg } = $.ui.resolve(e)
-      const summary = current.summary.replace(/^摘要[:：]\s*/, '')
-      const drawn = drawFlow(current.nodes, current.edges)
-      return (
-        <Box flexDirection="column" gap={1}>
-          {busy && <Text dimColor>更新中…</Text>}
-          {toolbar}
-          <Text bold>{summary}</Text>
-          <Svg
-            source={drawn.source}
-            width={zoom === 1 ? undefined : Math.round(drawn.width * zoom)}
-            alt={`流程圖：${summary}；步驟依序為${current.nodes.map(node => node.label).join('、')}`}
-          />
         </Box>
       )
     }
