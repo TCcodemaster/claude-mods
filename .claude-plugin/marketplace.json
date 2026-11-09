@@ -1,0 +1,5 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "TCcodemaster" },
+  "plugins": [{ "name": "ledger-hint", "source": "./ledger-hint" }]
+}

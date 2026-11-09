@@ -36,6 +36,17 @@
 
 4. 重開 Claude Code 對話。
 
+## 讓已開著的對話載入 ledger-hint
+
+`CLAUDE_CODE_PLUGIN_DIRS` 只在對話啟動時讀一次，`/reload-plugins` 也不會重讀它。要讓已開著的對話載入 ledger-hint，就從這個 repo 的外掛市集再安裝一份：
+
+```sh
+claude plugin marketplace add ~/.claude/mods
+claude plugin install ledger-hint@claude-mods
+```
+
+之後在已開著的對話輸入 `/reload-plugins` 即可。已經從資料夾載入 ledger-hint 的對話不會再載入第二份，所以每個對話都可以放心執行。
+
 ## 自動更新
 
 每次開 Claude Code 對話時，flowmap 會在背景對這個 repo 跑 `git pull --ff-only`，有更新會跳提示。本機有未推送的提交或衝突時會跳過，不會動任何檔案。VS Code 檢視器（`.vsix`）不會自動重裝，更新後要再跑一次安裝步驟 3。
