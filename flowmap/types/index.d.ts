@@ -15,6 +15,6 @@ export type FlowView = { turn: number; state: 'judging' | 'offer' | 'wanted' | '
 
 declare module 'claude-code' {
   interface PluginState {
-    flowmap: { map: FlowMap | null; isBusy: boolean; isAuto: boolean; isWeb: boolean; browser: string | null; lastAnswer: string; view: FlowView | null }
+    flowmap: { map: FlowMap | null; isBusy: boolean; isAuto: boolean; isWeb: boolean; browser: string | null; lastAnswer: string; view: FlowView | null; history: FlowMap[]; shownAt: number; zoom: number }
   }
 }

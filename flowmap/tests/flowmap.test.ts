@@ -545,3 +545,29 @@ test('面板：桌面版畫 SVG 流程圖，終端機畫縮排大綱', async ($,
   expect(await terminal.find({ type: 'Svg' })).toBeUndefined()
   expect(await terminal.find({ type: 'Text', text: '繼續往下' })).toBeDefined()
 })
+
+test('面板工具列：上一張、下一張與縮放', async ($, on) => {
+  const seen: Seen = { prompts: [], argv: [], files: [], judged: 0, verdict: '是' }
+  const clock = setup(on, seen, INSTALL)
+  for (const text of ['步驟', '流程']) {
+    await $.turn.complete(answer(text.repeat(400)))
+    await clock.advance(1)
+    await clock.advance(1)
+    await look($)
+  }
+  const pane = await $.ui.mount({ plugin: 'flowmap', surface: 'desktop', component: 'Pane', requestId: 'flowmap', props: {} as never })
+  expect(await pane.find({ type: 'Text', text: '2 / 2' })).toBeDefined()
+  await pane.press({ key: 'flowmap-prev' })
+  expect(await pane.find({ type: 'Text', text: '1 / 2' })).toBeDefined()
+  await pane.press({ key: 'flowmap-prev' })
+  expect(await pane.find({ type: 'Text', text: '1 / 2' })).toBeDefined()
+  await pane.press({ key: 'flowmap-next' })
+  expect(await pane.find({ type: 'Text', text: '2 / 2' })).toBeDefined()
+  expect((await pane.find({ type: 'Svg' }))?.props.width).toBeUndefined()
+  await pane.press({ key: 'flowmap-zoom-in' })
+  expect(await pane.find({ type: 'Text', text: '125%' })).toBeDefined()
+  expect(Number((await pane.find({ type: 'Svg' }))?.props.width)).toBeGreaterThan(0)
+  const terminal = await $.ui.mount({ plugin: 'flowmap', surface: 'terminal', component: 'Pane', requestId: 'flowmap', props: {} as never })
+  expect(await terminal.find({ type: 'Button', key: 'flowmap-prev' })).toBeDefined()
+  expect(await terminal.find({ type: 'Button', key: 'flowmap-zoom-in' })).toBeUndefined()
+})

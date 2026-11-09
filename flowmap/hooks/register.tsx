@@ -4,7 +4,7 @@ import type { Elements, EngineInterface, Register } from 'claude-code'
 import type { FlowMap, FlowView } from '../types'
 import { BOOT_HTML, BOOT_READY, bootScripts, buildHtml, checkFlow, CMUX_LIMIT, findPane, JUDGE, mermaidForImage, outlineFlow, parseReply, parseSurface, renderScripts, SYSTEM, TERMINAL_COLORS, toDataUrl } from './flow'
 import type { Parsed } from './flow'
-import { flowSvg } from './svg'
+import { drawFlow } from './svg'
 
 const PANE = 'flowmap'
 const TITLE = '圖解'
@@ -26,6 +26,11 @@ const browser = atom({ plugin: 'flowmap', key: 'browser' } as const, null)
 const lastAnswer = atom({ plugin: 'flowmap', key: 'lastAnswer' } as const, '')
 // 提示框上方的按鈕依這個狀態決定要顯示「隱藏」還是「畫這則」。
 const view = atom({ plugin: 'flowmap', key: 'view' } as const, null)
+// 面板的上一張、下一張與縮放：最近 20 張圖、正在看第幾張（-1 代表最新一張）、縮放比例。
+const history = atom({ plugin: 'flowmap', key: 'history' } as const, [])
+const shownAt = atom({ plugin: 'flowmap', key: 'shownAt' } as const, -1)
+const zoomLevel = atom({ plugin: 'flowmap', key: 'zoom' } as const, 1)
+const ZOOMS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 // 太短的回應直接略過，不必花一次 Haiku 判斷。
 const MIN_CHARS = 300
@@ -245,6 +250,8 @@ async function generate($: EngineInterface, turn: number): Promise<void> {
   const at = await $.clock.now()
   const next: FlowMap = { ...parsed, at, turn }
   await update($, map, () => next)
+  await update($, history, list => [...list, next].slice(-20))
+  await update($, shownAt, () => -1)
   // 預設不顯示，只有使用者按了「看圖解」才送出去。
   if (isWanted) await reveal($, next)
   else await offerInVSCode($, next)
@@ -387,10 +394,30 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
-    const current = await read($, map)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const list = await read($, history)
+    const at = await read($, shownAt)
+    const zoom = await read($, zoomLevel)
+    const index = at >= 0 && at < list.length ? at : list.length - 1
+    const current = list[index] ?? (await read($, map))
     const busy = await read($, isBusy)
     const auto = await read($, isAuto)
+    const canDraw = e.surface !== 'terminal'
+
+    // 工具列：上一張、下一張；能畫 SVG 的介面再加縮小、放大。
+    const go = (step: number) => update($, shownAt, () => Math.min(list.length - 1, Math.max(0, index + step)))
+    const scale = (step: number) =>
+      update($, zoomLevel, z => ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, ZOOMS.indexOf(z) + step))] ?? 1)
+    const toolbar = (list.length > 1 || canDraw) && (
+      <Box gap={1} flexWrap="wrap">
+        <Button key="flowmap-prev" label="上一張" dimColor={index <= 0} onPress={() => go(-1)} />
+        <Text dimColor>{`${index + 1} / ${Math.max(1, list.length)}`}</Text>
+        <Button key="flowmap-next" label="下一張" dimColor={index >= list.length - 1} onPress={() => go(1)} />
+        {canDraw && <Button key="flowmap-zoom-out" label="縮小" dimColor={zoom <= (ZOOMS[0] ?? 0.5)} onPress={() => scale(-1)} />}
+        {canDraw && <Text dimColor>{`${Math.round(zoom * 100)}%`}</Text>}
+        {canDraw && <Button key="flowmap-zoom-in" label="放大" dimColor={zoom >= (ZOOMS.at(-1) ?? 2)} onPress={() => scale(1)} />}
+      </Box>
+    )
 
     if (!current) {
       return (
@@ -406,8 +433,9 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {busy && <Text dimColor>更新中…</Text>}
+          {toolbar}
           <Text bold>{current.summary.replace(/^摘要[:：]\s*/, '')}</Text>
-          <Text dimColor>{`${DIAGRAM_NAMES[current.diagram] ?? current.diagram}，完整圖在 cmux 瀏覽器窗格`}</Text>
+          <Text dimColor>{`${DIAGRAM_NAMES[current.diagram] ?? current.diagram}的大綱`}</Text>
           <Text> </Text>
           {current.outline.map((line, i) => (
             <Text wrap="truncate-end" color={i === 0 ? TERMINAL_COLORS.start : undefined} bold={!line.startsWith(' ')}>
@@ -422,11 +450,17 @@ export const register: Register = on => {
     if (e.surface !== 'terminal') {
       const { Svg } = $.ui.resolve(e)
       const summary = current.summary.replace(/^摘要[:：]\s*/, '')
+      const drawn = drawFlow(current.nodes, current.edges)
       return (
         <Box flexDirection="column" gap={1}>
           {busy && <Text dimColor>更新中…</Text>}
+          {toolbar}
           <Text bold>{summary}</Text>
-          <Svg source={flowSvg(current.nodes, current.edges)} alt={`流程圖：${summary}；步驟依序為${current.nodes.map(node => node.label).join('、')}`} />
+          <Svg
+            source={drawn.source}
+            width={zoom === 1 ? undefined : Math.round(drawn.width * zoom)}
+            alt={`流程圖：${summary}；步驟依序為${current.nodes.map(node => node.label).join('、')}`}
+          />
         </Box>
       )
     }
@@ -435,6 +469,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {busy && <Text dimColor>更新中…</Text>}
+        {toolbar}
         <Text bold>{current.summary.replace(/^摘要[:：]\s*/, '')}</Text>
         <Text> </Text>
         {outlineFlow(current.nodes, current.edges).map(line => (

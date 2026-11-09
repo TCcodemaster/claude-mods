@@ -175,12 +175,18 @@ export function layoutFlow(given: FlowNode[], edges: FlowEdge[]): FlowLayout {
   const position = new Map<string, number>()
   const index = () => layers.forEach(layer => layer.forEach((id, i) => position.set(id, i)))
   index()
+  // 這個方向沒有鄰居的節點（例如「回到」標籤沒有下一步）留在原位，其餘依鄰居平均位置排進剩下的空位。
   const reorder = (layer: string[], near: Map<string, string[]>) => {
-    const bary = new Map(layer.map(id => {
+    const hasNear = (id: string) => (near.get(id) ?? []).length > 0
+    const baryOf = (id: string) => {
       const around = near.get(id) ?? []
-      return [id, around.length === 0 ? (position.get(id) ?? 0) : around.reduce((s, n) => s + (position.get(n) ?? 0), 0) / around.length]
-    }))
-    layer.sort((a, b) => (bary.get(a) ?? 0) - (bary.get(b) ?? 0))
+      return around.reduce((s, n) => s + (position.get(n) ?? 0), 0) / around.length
+    }
+    const sorted = layer.filter(hasNear).sort((a, b) => baryOf(a) - baryOf(b))
+    let k = 0
+    layer.forEach((id, i) => {
+      if (hasNear(id)) layer[i] = sorted[k++] ?? id
+    })
   }
   for (let pass = 0; pass < 4; pass += 1) {
     for (let r = 1; r <= depth; r += 1) reorder(layers[r] ?? [], preds)
@@ -195,7 +201,9 @@ export function layoutFlow(given: FlowNode[], edges: FlowEdge[]): FlowLayout {
   for (let id = deepest?.id; id !== undefined; ) {
     spine.add(id)
     const rankHere = items.get(id)?.rank ?? 0
-    id = (preds.get(id) ?? []).find(p => (items.get(p)?.rank ?? 0) === rankHere - 1)
+    // 上一層若同時有真正的節點和長邊的轉折點，主軸走真正的節點。
+    const above = (preds.get(id) ?? []).filter(p => (items.get(p)?.rank ?? 0) === rankHere - 1)
+    id = above.find(p => items.get(p)?.node) ?? above[0]
   }
   const sep = (a: string, b: string) => ((items.get(a)?.w ?? 0) + (items.get(b)?.w ?? 0)) / 2 + GAP_X
   const centerOf = (ids: string[]) => ids.reduce((sum, id) => sum + (items.get(id)?.x ?? 0), 0) / ids.length
@@ -252,17 +260,55 @@ export function layoutFlow(given: FlowNode[], edges: FlowEdge[]): FlowLayout {
 const escape = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const n = (value: number) => Math.round(value * 10) / 10
 
-function label(x: number, y: number, text: string): string {
-  if (text === '') return ''
-  const w = textWidth(text) * (13 / FONT) + 10
-  return `<g class="lb"><rect x="${n(x - w / 2)}" y="${n(y - 10)}" width="${n(w)}" height="20" rx="4" fill="#ffffff"/><text x="${n(x)}" y="${n(y + 4.5)}" font-size="13" text-anchor="middle" fill="#59636e">${escape(text)}</text></g>`
+// 分支標籤：字小一號，太長就折成兩行，放在箭頭進入目標之前。
+const LABEL_FONT = 13
+const LABEL_LINE = 16
+type Tag = { x: number; y: number; w: number; h: number; lines: string[] }
+
+function makeTag(x: number, bottom: number, text: string): Tag {
+  const lines = wrapLabel(text, 140)
+  const w = Math.max(...lines.map(textWidth)) * (LABEL_FONT / FONT) + 10
+  const h = lines.length * LABEL_LINE + 4
+  return { x, y: bottom - h, w, h, lines }
+}
+
+// 同一帶的標籤互相推開，直到不重疊；最多試幾輪，避免來回推不停。
+function separate(tags: Tag[]): void {
+  for (let round = 0; round < 12; round += 1) {
+    let moved = false
+    for (let i = 0; i < tags.length; i += 1) {
+      for (let j = i + 1; j < tags.length; j += 1) {
+        const a = tags[i]
+        const b = tags[j]
+        if (!a || !b) continue
+        const overlapX = (a.w + b.w) / 2 + 4 - Math.abs(a.x - b.x)
+        const overlapY = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+        if (overlapX <= 0 || overlapY <= 0) continue
+        const [left, right] = a.x <= b.x ? [a, b] : [b, a]
+        left.x -= overlapX / 2
+        right.x += overlapX / 2
+        moved = true
+      }
+    }
+    if (!moved) return
+  }
+}
+
+function drawTag(tag: Tag): string {
+  const tspans = tag.lines.map((line, i) => `<tspan x="${n(tag.x)}" y="${n(tag.y + 2 + LABEL_FONT * 0.95 + i * LABEL_LINE)}">${escape(line)}</tspan>`).join('')
+  return `<g class="lb"><rect x="${n(tag.x - tag.w / 2)}" y="${n(tag.y)}" width="${n(tag.w)}" height="${n(tag.h)}" rx="4" fill="#ffffff"/><text font-size="${LABEL_FONT}" text-anchor="middle" fill="#59636e">${tspans}</text></g>`
 }
 
 export function flowSvg(nodes: FlowNode[], edges: FlowEdge[]): string {
+  return drawFlow(nodes, edges).source
+}
+
+// 回傳 SVG 原始碼與原始寬高，面板依寬度縮放。
+export function drawFlow(nodes: FlowNode[], edges: FlowEdge[]): { source: string; width: number; height: number } {
   const layout = layoutFlow(nodes, edges)
   const { items } = layout
   const parts: string[] = []
-  const labels: string[] = []
+  const tags: Tag[] = []
 
   // 往下的邊：從節點底部出發，經過轉折點，進入目標頂部；標籤放在第一段的中點。
   for (const { edge, ids } of layout.chains) {
@@ -282,13 +328,11 @@ export function flowSvg(nodes: FlowNode[], edges: FlowEdge[]): string {
       else d += ` C${n(x0)},${n((y0 + y1) / 2)} ${n(x1)},${n((y0 + y1) / 2)} ${n(x1)},${n(y1)}`
     }
     parts.push(`<path class="e" d="${d}" fill="none" stroke="#9aa1ab" stroke-width="1.6" marker-end="url(#a)"/>`)
-    // 標籤放在第一段曲線約七成的位置：分支多時靠近各自的目標，彼此錯開不擠在判斷底下。
-    const [x0, y0] = points[0] ?? [0, 0]
+    // 標籤放在第一段的終點正上方：分支多時各自對齊自己的目標，不會擠在判斷底下。
     const [x1, y1] = points[1] ?? [0, 0]
-    const t = x0 === x1 ? 0.5 : 0.7
-    const ease = 3 * t * t - 2 * t * t * t
-    labels.push(label(x0 + (x1 - x0) * ease, y0 + (y1 - y0) * t, edge.label))
+    if (edge.label !== '') tags.push(makeTag(x1, y1 - 8, edge.label))
   }
+  separate(tags)
 
   // 節點：起點與結果用膠囊形，判斷用六角形，「回到」用虛線小標籤，其餘用圓角矩形。
   for (const item of items.values()) {
@@ -317,13 +361,18 @@ export function flowSvg(nodes: FlowNode[], edges: FlowEdge[]): string {
     parts.push(`<text class="t" text-anchor="middle" font-weight="${weight}" fill="#1f2328">${tspans}</text>`)
   }
 
+  // 推開後的標籤可能超出原本的畫布，左右各補一點空間。
+  const minX = Math.min(0, ...tags.map(tag => tag.x - tag.w / 2 - 4))
+  const maxX = Math.max(layout.width, ...tags.map(tag => tag.x + tag.w / 2 + 4))
+  const width = Math.ceil(maxX - minX)
   const dark = Object.entries(DARK).map(([kind, [fill, stroke]]) => `.s.${kind}{fill:${fill};stroke:${stroke}}`).join('')
-  return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${layout.width} ${layout.height}" width="${layout.width}" height="${layout.height}" font-family="-apple-system, 'PingFang TC', 'Noto Sans TC', sans-serif" font-size="${FONT}">`,
+  const source = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${n(minX)} 0 ${width} ${layout.height}" width="${width}" height="${layout.height}" font-family="-apple-system, 'PingFang TC', 'Noto Sans TC', sans-serif" font-size="${FONT}">`,
     `<style>@media (prefers-color-scheme: dark){${dark}.t{fill:#e6e6e6}.e{stroke:#6b7280}.ah{fill:#6b7280}.lb rect{fill:#1e2128}.lb text{fill:#9aa4b2}.m{fill:#9aa4b2}.rf{stroke:#6b7280}}</style>`,
     '<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z" fill="#9aa1ab"/></marker></defs>',
     ...parts,
-    ...labels,
+    ...tags.map(drawTag),
     '</svg>',
   ].join('')
+  return { source, width, height: layout.height }
 }
