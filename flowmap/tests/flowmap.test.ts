@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { BOOT_HTML, checkFlow, CMUX_LIMIT, findPane, JUDGE, outlineFlow, parseReply, parseSurface, renderScripts, toDataUrl } from '../hooks/flow'
 import type { FlowLine } from '../hooks/flow'
-import { flowSvg, layoutFlow, wrapLabel } from '../hooks/svg'
+import { flowSvg, layoutFlow, layoutTree, wrapLabel } from '../hooks/svg'
 import { drawSequence, drawTimeline, parseSequence, parseTimeline } from '../hooks/diagrams'
 
 const usage = { input_tokens: 1, output_tokens: 1 } as never
@@ -551,6 +551,60 @@ test('標籤折行時各行寬度平均，不留下單獨一個字', () => {
   expect(wrapLabel('短標籤')).toEqual(['短標籤'])
   expect(wrapLabel('請使用者 ssh-copy-id')).toEqual(['請使用者', 'ssh-copy-id'])
   expect(wrapLabel('步驟4 備份 settings.json')).toEqual(['步驟4 備份', 'settings.json'])
+  expect(wrapLabel('Docker：環境一致但較重')).toEqual(['Docker：', '環境一致但較重'])
+})
+
+const TREE = [
+  '摘要：回饋問題分類。',
+  '```mermaid',
+  'flowchart TD',
+  '  A["回饋問題分析"]:::start',
+  '  A --> B["已確認缺陷：先修"]:::step',
+  '  A --> C["介面調整：可一起改"]:::step',
+  '  A --> D["待你決定再動手"]:::warn',
+  '  B --> E["3. 0人類別不顯示"]:::step',
+  '  B --> F["6. SPSS中文欄位名跑掉"]:::step',
+  '  C --> H["4. 匯出語法不明顯，而且按鈕位置很難找到"]:::step',
+  '  D -->|待確認| I["5. 計畫合併成一張卡"]:::step',
+  '  E --> K["類別取標籤全部代碼"]:::done',
+  '  E --> L["檢定表照舊排除並註明"]:::warn',
+  '  F --> M["只換不合法字元"]:::done',
+  '  F --> N["長度改算64位元組"]:::done',
+  '  H --> Q["改按鈕"]:::done',
+  '  I --> S["依表號順序一次跑完"]:::done',
+  '  I --> T["自動書籤與逐張修改？"]:::warn',
+  '```',
+].join('\n')
+
+test('SVG 樹狀圖：末端多時改由左往右排，上層對齊子項中間，同欄不重疊', () => {
+  const parsed = parseReply(TREE)
+  const layout = layoutTree(parsed?.nodes ?? [], parsed?.edges ?? [])
+  expect(layout).not.toBeNull()
+  const at = (id: string) => layout?.items.get(id) ?? { x: 0, y: 0, w: 0, h: 0, rank: 0 }
+  const mid = (id: string) => at(id).y + at(id).h / 2
+  for (const [id, kids] of layout?.kids ?? []) {
+    if (kids.length === 0) continue
+    for (const kid of kids) expect(at(kid).x - at(kid).w / 2).toBeGreaterThan(at(id).x + at(id).w / 2)
+    // 上層比子項高時子項整組往下移，上層中線仍對齊第一個與最後一個子項的中間。
+    expect(Math.abs(mid(id) - (mid(kids[0] ?? '') + mid(kids.at(-1) ?? '')) / 2)).toBeLessThan(0.5)
+  }
+  const real = [...(layout?.items.values() ?? [])]
+  for (const a of real) {
+    for (const b of real) {
+      if (a === b || a.rank !== b.rank) continue
+      expect(a.y + a.h <= b.y || b.y + b.h <= a.y).toBe(true)
+    }
+  }
+  const svg = flowSvg(parsed?.nodes ?? [], parsed?.edges ?? [])
+  for (const label of ['待確認', '結果', '注意', '依表號順序一次跑完']) expect(svg).toContain(label)
+  expect(svg).not.toContain('marker-end')
+})
+
+test('SVG 樹狀圖：主線長的流程與有迴圈的圖仍由上往下排', () => {
+  const flow = parseReply(REPLY)
+  expect(layoutTree(flow?.nodes ?? [], flow?.edges ?? [])).toBeNull()
+  const loop = parseReply(INSTALL)
+  expect(layoutTree(loop?.nodes ?? [], loop?.edges ?? [])).toBeNull()
 })
 
 test('面板：桌面版畫 SVG 流程圖，終端機畫縮排大綱', async ($, on) => {
