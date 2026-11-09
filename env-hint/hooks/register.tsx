@@ -60,31 +60,18 @@ export const register: Register = on => {
       return below
     }
 
-    const { Box, Text } = $.ui.resolve(e)
+    const { Text } = $.ui.resolve(e)
+    // 只留三個值，用顏色區分：機器藍、資料夾綠、分支紫；字小一級，中間用淡色斜線隔開。
+    const parts = [
+      ...(now.machine === null ? [] : [<Text color="suggestion" weight="medium">{now.machine}</Text>]),
+      <Text color="success" weight="medium">{now.folder}</Text>,
+      now.branch === null ? <Text dimColor>非 git 目錄</Text> : <Text color="merged" weight="medium">{now.branch}</Text>,
+    ]
 
     return (
-      <Box>
-        {now.machine !== null && (
-          <Text>
-            <Text dimColor>機器 </Text>
-            <Text color="suggestion" bold>{now.machine}</Text>
-            <Text dimColor>{'   '}</Text>
-          </Text>
-        )}
-        <Text>
-          <Text dimColor>資料夾 </Text>
-          <Text color="success" bold>{now.folder}</Text>
-          <Text dimColor>{'   '}</Text>
-        </Text>
-        {now.branch === null ? (
-          <Text dimColor>非 git 目錄</Text>
-        ) : (
-          <Text>
-            <Text dimColor>分支 </Text>
-            <Text color="merged" bold>{now.branch}</Text>
-          </Text>
-        )}
-      </Box>
+      <Text size="footnote" wrap="truncate-end">
+        {parts.flatMap((part, i) => (i === 0 ? [part] : [<Text dimColor>{' / '}</Text>, part]))}
+      </Text>
     )
   })
 }
