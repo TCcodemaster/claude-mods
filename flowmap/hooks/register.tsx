@@ -390,10 +390,12 @@ export const register: Register = on => {
     const card = drawCard($, ui, current)
     const below = await next(e)
     if (below.type === 'engine') return card
+    // 桌機版的 Box 會換行，env-hint 那一行寬度是 100%，不鎖住就會整行掉到按鈕下面。
+    // 固定不換行，按鈕不縮，右側容器可以縮到剩餘寬度。
     return (
-      <ui.Box width="100%" alignItems="center" gap={2}>
-        {card}
-        <ui.Box flexGrow={1}>{below}</ui.Box>
+      <ui.Box width="100%" alignItems="center" gap={2} flexWrap="nowrap">
+        <ui.Box flexShrink={0}>{card}</ui.Box>
+        <ui.Box flexGrow={1} flexShrink={1} minWidth={0}>{below}</ui.Box>
       </ui.Box>
     )
   })
